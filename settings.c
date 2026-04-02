@@ -1,6 +1,7 @@
 #include "settings.h"
 
 #include <toolbox/saved_struct.h>
+#include <stdio.h>
 
 typedef struct {
     FlipRSDRSettings settings;
@@ -58,11 +59,17 @@ static const char* fliprsdr_gap_threshold_labels[] = {
     "200 ms",
 };
 
+#define FLIPRSDR_FREQUENCY_OFFSET_OPTIONS_COUNT \
+    (((FLIPRSDR_FREQUENCY_OFFSET_MAX_KHZ - FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ) / \
+      FLIPRSDR_FREQUENCY_OFFSET_STEP_KHZ) + \
+     1)
+
 void fliprsdr_settings_load_defaults(FlipRSDRSettings* settings) {
     furi_assert(settings);
     settings->frequency_preset = FlipRSDRFrequencyPreset43392;
     settings->transport_kind = FlipRSDRTransportKindUsb;
     settings->stream_mode = FlipRSDRStreamModeBuffered;
+    settings->frequency_offset_khz = 0;
     settings->auto_send_after_burst = false;
     settings->include_rssi = true;
     settings->include_timestamp = true;
@@ -82,6 +89,16 @@ void fliprsdr_settings_validate(FlipRSDRSettings* settings) {
     }
     if(settings->stream_mode >= FlipRSDRStreamModeCount) {
         settings->stream_mode = FlipRSDRStreamModeBuffered;
+    }
+    if(settings->frequency_offset_khz < FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ) {
+        settings->frequency_offset_khz = FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ;
+    } else if(settings->frequency_offset_khz > FLIPRSDR_FREQUENCY_OFFSET_MAX_KHZ) {
+        settings->frequency_offset_khz = FLIPRSDR_FREQUENCY_OFFSET_MAX_KHZ;
+    } else {
+        const int16_t step = FLIPRSDR_FREQUENCY_OFFSET_STEP_KHZ;
+        int16_t delta = settings->frequency_offset_khz - FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ;
+        settings->frequency_offset_khz =
+            FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ + ((delta + (step / 2)) / step) * step;
     }
 
     settings->max_pulse_count =
@@ -137,9 +154,56 @@ uint32_t fliprsdr_settings_frequency_value(uint8_t preset_index) {
     return fliprsdr_frequency_values[preset_index];
 }
 
+uint32_t fliprsdr_settings_frequency_hz(const FlipRSDRSettings* settings) {
+    furi_assert(settings);
+    const int64_t base_hz = (int64_t)fliprsdr_settings_frequency_value(settings->frequency_preset);
+    const int64_t offset_hz = (int64_t)settings->frequency_offset_khz * 1000LL;
+    const int64_t tuned_hz = base_hz + offset_hz;
+
+    if(tuned_hz < 0) {
+        return 0U;
+    }
+
+    return (uint32_t)tuned_hz;
+}
+
 const char* fliprsdr_settings_frequency_label(uint8_t preset_index) {
     if(preset_index >= FlipRSDRFrequencyPresetCount) return "?";
     return fliprsdr_frequency_labels[preset_index];
+}
+
+uint8_t fliprsdr_settings_frequency_offset_options_count(void) {
+    return FLIPRSDR_FREQUENCY_OFFSET_OPTIONS_COUNT;
+}
+
+int16_t fliprsdr_settings_frequency_offset_value(uint8_t index) {
+    if(index >= FLIPRSDR_FREQUENCY_OFFSET_OPTIONS_COUNT) {
+        index = fliprsdr_settings_frequency_offset_index(0);
+    }
+
+    return (int16_t)(FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ +
+                     ((int16_t)index * FLIPRSDR_FREQUENCY_OFFSET_STEP_KHZ));
+}
+
+uint8_t fliprsdr_settings_frequency_offset_index(int16_t value) {
+    if(value <= FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ) {
+        return 0U;
+    }
+    if(value >= FLIPRSDR_FREQUENCY_OFFSET_MAX_KHZ) {
+        return FLIPRSDR_FREQUENCY_OFFSET_OPTIONS_COUNT - 1U;
+    }
+
+    return (uint8_t)((value - FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ) /
+                     FLIPRSDR_FREQUENCY_OFFSET_STEP_KHZ);
+}
+
+void fliprsdr_settings_frequency_offset_label(int16_t value, char* buffer, size_t size) {
+    furi_assert(buffer);
+    if(value == 0) {
+        snprintf(buffer, size, "0 kHz");
+    } else {
+        snprintf(buffer, size, "%+d kHz", value);
+    }
 }
 
 const char* fliprsdr_settings_transport_label(uint8_t transport_index) {

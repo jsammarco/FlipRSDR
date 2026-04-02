@@ -19,6 +19,7 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
   - `Back` leaves the screen and stops capture
 - `Settings`
   - Frequency preset
+  - Frequency fine-tune offset
   - Transport
   - Streaming mode
   - Auto-send after burst complete
@@ -129,6 +130,9 @@ The Windows desktop companion app lives under `receiver/` and is called `FlipRSD
 - Waterfall view using log-duration bins with SDR-style coloring
 - Optional recording of completed bursts to JSONL
 - Optional audible playback of completed bursts
+- Automatic port refresh while disconnected, plus last-port recall on restart
+
+![FlipRSDR Receiver screenshot](receiver/ScreenShot.JPG)
 
 Build the Windows executable with:
 

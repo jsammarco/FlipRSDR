@@ -58,6 +58,10 @@ static bool fliprsdr_capture_store_local_enabled(const FlipRSDRCapture* capture)
            (capture->settings.stream_mode == FlipRSDRStreamModeLiveBuffered);
 }
 
+static uint32_t fliprsdr_capture_frequency_hz(const FlipRSDRCapture* capture) {
+    return fliprsdr_settings_frequency_hz(&capture->settings);
+}
+
 static void fliprsdr_capture_flush_live_chunk(FlipRSDRCapture* capture) {
     if(!fliprsdr_capture_stream_live_enabled(capture) || (capture->live_chunk_count == 0U)) {
         return;
@@ -81,7 +85,7 @@ static void fliprsdr_capture_begin_burst(FlipRSDRCapture* capture, bool first_le
         &capture->working,
         capture->session_id,
         capture->next_burst_id++,
-        fliprsdr_settings_frequency_value(capture->settings.frequency_preset),
+        fliprsdr_capture_frequency_hz(capture),
         timestamp_ms,
         first_level);
     capture->in_burst = true;
@@ -271,7 +275,7 @@ bool fliprsdr_capture_start(FlipRSDRCapture* capture) {
     fliprsdr_capture_cleanup_worker(capture);
     if(capture->running) return true;
 
-    const uint32_t frequency = fliprsdr_settings_frequency_value(capture->settings.frequency_preset);
+    const uint32_t frequency = fliprsdr_capture_frequency_hz(capture);
     if(!furi_hal_subghz_is_frequency_valid(frequency)) {
         return false;
     }
@@ -352,7 +356,7 @@ bool fliprsdr_capture_send_debug_burst(FlipRSDRCapture* capture) {
         &capture->settings,
         capture->session_id + 1U,
         1U,
-        fliprsdr_settings_frequency_value(capture->settings.frequency_preset));
+        fliprsdr_capture_frequency_hz(capture));
 }
 
 void fliprsdr_capture_copy_snapshot(
@@ -377,7 +381,7 @@ void fliprsdr_capture_copy_snapshot(
     snapshot->current_stored_count = capture->working.stored_count;
     snapshot->buffered_total_count = capture->buffered.total_count;
     snapshot->buffered_stored_count = capture->buffered.stored_count;
-    snapshot->frequency_hz = fliprsdr_settings_frequency_value(capture->settings.frequency_preset);
+    snapshot->frequency_hz = fliprsdr_capture_frequency_hz(capture);
     snapshot->last_rssi = capture->last_rssi;
 
     if(capture->running) {

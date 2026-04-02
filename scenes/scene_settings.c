@@ -2,6 +2,7 @@
 
 enum {
     FlipRSDRSettingsItemFrequency = 0,
+    FlipRSDRSettingsItemFrequencyOffset,
     FlipRSDRSettingsItemTransport,
     FlipRSDRSettingsItemStreamMode,
     FlipRSDRSettingsItemAutoSend,
@@ -18,6 +19,18 @@ static void fliprsdr_scene_settings_frequency_changed(VariableItem* item) {
     const uint8_t index = variable_item_get_current_value_index(item);
     app->settings.frequency_preset = index;
     variable_item_set_current_value_text(item, fliprsdr_settings_frequency_label(index));
+    app->settings_dirty = true;
+}
+
+static void fliprsdr_scene_settings_frequency_offset_changed(VariableItem* item) {
+    FlipRSDRApp* app = variable_item_get_context(item);
+    const uint8_t index = variable_item_get_current_value_index(item);
+    char label[16];
+
+    app->settings.frequency_offset_khz = fliprsdr_settings_frequency_offset_value(index);
+    fliprsdr_settings_frequency_offset_label(
+        app->settings.frequency_offset_khz, label, sizeof(label));
+    variable_item_set_current_value_text(item, label);
     app->settings_dirty = true;
 }
 
@@ -111,6 +124,21 @@ void fliprsdr_scene_settings_on_enter(void* context) {
     variable_item_set_current_value_index(item, app->settings.frequency_preset);
     variable_item_set_current_value_text(
         item, fliprsdr_settings_frequency_label(app->settings.frequency_preset));
+
+    item = variable_item_list_add(
+        app->variable_item_list,
+        "Tune",
+        fliprsdr_settings_frequency_offset_options_count(),
+        fliprsdr_scene_settings_frequency_offset_changed,
+        app);
+    variable_item_set_current_value_index(
+        item, fliprsdr_settings_frequency_offset_index(app->settings.frequency_offset_khz));
+    {
+        char label[16];
+        fliprsdr_settings_frequency_offset_label(
+            app->settings.frequency_offset_khz, label, sizeof(label));
+        variable_item_set_current_value_text(item, label);
+    }
 
     item = variable_item_list_add(
         app->variable_item_list,

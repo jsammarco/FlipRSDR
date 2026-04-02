@@ -188,11 +188,13 @@ void fliprsdr_capture_view_set_snapshot(
         capture_view->view,
         FlipRSDRCaptureViewModel * model,
         {
+            const uint32_t frequency_hz = fliprsdr_settings_frequency_hz(settings);
             snprintf(
                 model->frequency,
                 sizeof(model->frequency),
-                "Freq %s",
-                fliprsdr_settings_frequency_label(settings->frequency_preset));
+                "F %lu.%03luM",
+                (unsigned long)(frequency_hz / 1000000UL),
+                (unsigned long)((frequency_hz % 1000000UL) / 1000UL));
             fliprsdr_capture_view_format_link(model->link, sizeof(model->link), transport);
             snprintf(
                 model->capture_state,
