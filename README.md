@@ -14,13 +14,13 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
 
 ### Flipper app
 
-<table>
+<table width="100%">
   <tr>
-    <td align="center">
-      <img src="https://github.com/jsammarco/FlipRSDR/blob/main/screenshots/flipper%20screenshots/Freq%20Menu.png?raw=true" alt="Frequency menu" width="260" />
+    <td align="center" width="50%">
+      <img src="https://raw.githubusercontent.com/jsammarco/FlipRSDR/refs/heads/main/screenshots/flipper%20screenshots/Freq%20Menu.png" alt="Frequency menu" width="100%" />
     </td>
-    <td align="center">
-      <img src="https://github.com/jsammarco/FlipRSDR/blob/main/screenshots/flipper%20screenshots/Menu%20Page%202.png?raw=true" alt="Menu page 2" width="260" />
+    <td align="center" width="50%">
+      <img src="https://raw.githubusercontent.com/jsammarco/FlipRSDR/refs/heads/main/screenshots/flipper%20screenshots/Menu%20Page%202.png" alt="Menu page 2" width="100%" />
     </td>
   </tr>
   <tr>
@@ -32,22 +32,26 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
     </td>
   </tr>
   <tr>
-    <td align="center">
-      <img src="https://github.com/jsammarco/FlipRSDR/blob/main/screenshots/flipper%20screenshots/Scanning%20Screen.png?raw=true" alt="Scanning screen" width="260" />
+    <td align="center" width="50%">
+      <img src="https://raw.githubusercontent.com/jsammarco/FlipRSDR/refs/heads/main/screenshots/flipper%20screenshots/Scanning%20Screen.png" alt="Scanning screen" width="100%" />
     </td>
-    <td></td>
+    <td align="center" width="50%">
+      <img src="https://raw.githubusercontent.com/jsammarco/FlipRSDR/refs/heads/main/screenshots/flipper%20screenshots/Scanning%20Idle.png" alt="Scanning idle" width="100%" />
+    </td>
   </tr>
   <tr>
     <td align="center">
       Scanning screen
     </td>
-    <td></td>
+    <td align="center">
+      Scanning idle
+    </td>
   </tr>
 </table>
 
 ### Receiver app
 
-![FlipRSDR Receiver screenshot](https://github.com/jsammarco/FlipRSDR/blob/main/screenshots/receiver%20screeshots/receiver%20screenshot.jpg?raw=true)
+![FlipRSDR Receiver screenshot](https://raw.githubusercontent.com/jsammarco/FlipRSDR/refs/heads/main/screenshots/receiver%20screeshots/receiver%20screenshot.jpg)
 
 ## Main flow
 
