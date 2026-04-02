@@ -15,7 +15,7 @@ import numpy as np
 import pyqtgraph as pg
 import serial
 import serial.tools.list_ports
-from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtCore import QEvent, QSettings, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QApplication,
@@ -42,6 +42,7 @@ except ImportError:  # pragma: no cover - only used on Windows builds
 
 APP_NAME = "FlipRSDR Receiver"
 DEFAULT_BAUD_RATE = 9600
+PORT_REFRESH_INTERVAL_MS = 5000
 WATERFALL_BINS = 512
 WATERFALL_ROWS = 320
 WATERFALL_MIN_US = 16.0
@@ -257,6 +258,7 @@ class ReceiverMainWindow(QMainWindow):
         self.setWindowTitle(APP_NAME)
         self.resize(1440, 920)
 
+        self._settings = QSettings("FlipRSDR", "Receiver")
         self._receiver_thread: SerialReceiverThread | None = None
         self._current_burst: BurstData | None = None
         self._last_waveform_update = 0.0
@@ -265,12 +267,17 @@ class ReceiverMainWindow(QMainWindow):
         self._waterfall_rows = np.zeros((WATERFALL_ROWS, WATERFALL_BINS), dtype=np.float32)
         self._waterfall_count = 0
         self._audio_wave_bytes: bytes | None = None
+        self._port_refresh_timer = QTimer(self)
+        self._port_refresh_timer.setInterval(PORT_REFRESH_INTERVAL_MS)
+        self._port_refresh_timer.timeout.connect(self._refresh_ports_if_disconnected)
 
         pg.setConfigOptions(antialias=True, background="#05070a", foreground="#d8e1eb")
 
         self._build_ui()
+        self._load_ui_settings()
         self._refresh_ports()
         self._update_connection_ui(False)
+        self._port_refresh_timer.start()
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -304,6 +311,8 @@ class ReceiverMainWindow(QMainWindow):
         self.record_button.toggled.connect(self._toggle_recording)
         self.choose_recording_button.clicked.connect(self._choose_recording_folder)
         self.clear_waterfall_button.clicked.connect(self._clear_waterfall)
+        self.port_combo.currentTextChanged.connect(self._on_port_selection_changed)
+        self.baud_combo.currentTextChanged.connect(self._on_baud_selection_changed)
 
         control_row.addWidget(QLabel("Port"))
         control_row.addWidget(self.port_combo)
@@ -397,9 +406,19 @@ class ReceiverMainWindow(QMainWindow):
         self.addAction(refresh_action)
 
     def closeEvent(self, event) -> None:  # type: ignore[override]
+        self._save_ui_settings()
         self._disconnect_receiver()
         self._stop_recording()
         super().closeEvent(event)
+
+    def focusInEvent(self, event) -> None:  # type: ignore[override]
+        self._refresh_ports_if_disconnected()
+        super().focusInEvent(event)
+
+    def changeEvent(self, event) -> None:  # type: ignore[override]
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            self._refresh_ports_if_disconnected()
+        super().changeEvent(event)
 
     def _build_sdr_lut(self) -> np.ndarray:
         stops = np.array([0.0, 0.12, 0.26, 0.48, 0.68, 0.82, 1.0], dtype=np.float32)
@@ -422,15 +441,28 @@ class ReceiverMainWindow(QMainWindow):
         return lut
 
     def _refresh_ports(self) -> None:
+        preferred_port = self.port_combo.currentText().strip()
+        if not preferred_port:
+            preferred_port = str(self._settings.value("serial/last_port", "", type=str)).strip()
+
         current_port = self.port_combo.currentText()
         ports = [port.device for port in serial.tools.list_ports.comports()]
         self.port_combo.clear()
         self.port_combo.addItems(ports)
-        if current_port and current_port in ports:
+        if preferred_port and preferred_port in ports:
+            self.port_combo.setCurrentText(preferred_port)
+        elif current_port and current_port in ports:
             self.port_combo.setCurrentText(current_port)
         elif ports:
             self.port_combo.setCurrentIndex(0)
         self.statusBar().showMessage(f"Found {len(ports)} serial port(s)")
+        if self.port_combo.currentText().strip():
+            self._settings.setValue("serial/last_port", self.port_combo.currentText().strip())
+
+    def _refresh_ports_if_disconnected(self) -> None:
+        if self._receiver_thread and self._receiver_thread.isRunning():
+            return
+        self._refresh_ports()
 
     def _toggle_connection(self) -> None:
         if self._receiver_thread and self._receiver_thread.isRunning():
@@ -445,6 +477,8 @@ class ReceiverMainWindow(QMainWindow):
             return
 
         baud_rate = int(self.baud_combo.currentText())
+        self._settings.setValue("serial/last_port", port_name)
+        self._settings.setValue("serial/baud_rate", baud_rate)
         self._receiver_thread = SerialReceiverThread(port_name, baud_rate, self)
         self._receiver_thread.status_changed.connect(self._on_status_changed)
         self._receiver_thread.raw_line_received.connect(self._append_log_line)
@@ -469,6 +503,14 @@ class ReceiverMainWindow(QMainWindow):
         self.port_combo.setEnabled(not connected)
         self.baud_combo.setEnabled(not connected)
         self.refresh_ports_button.setEnabled(not connected)
+
+    def _on_port_selection_changed(self, port_name: str) -> None:
+        if port_name.strip():
+            self._settings.setValue("serial/last_port", port_name.strip())
+
+    def _on_baud_selection_changed(self, baud_rate: str) -> None:
+        if baud_rate.strip():
+            self._settings.setValue("serial/baud_rate", baud_rate.strip())
 
     def _on_status_changed(self, text: str) -> None:
         self.connection_value.setText(text)
@@ -697,6 +739,22 @@ class ReceiverMainWindow(QMainWindow):
             wav_file.setframerate(sample_rate)
             wav_file.writeframes(waveform.tobytes())
         return buffer.getvalue()
+
+    def _load_ui_settings(self) -> None:
+        saved_baud = str(self._settings.value("serial/baud_rate", str(DEFAULT_BAUD_RATE), type=str))
+        baud_index = self.baud_combo.findText(saved_baud)
+        if baud_index >= 0:
+            self.baud_combo.setCurrentIndex(baud_index)
+
+        saved_recording_path = str(self._settings.value("recording/path", "", type=str)).strip()
+        if saved_recording_path:
+            self._recording_path = Path(saved_recording_path)
+
+    def _save_ui_settings(self) -> None:
+        self._settings.setValue("serial/last_port", self.port_combo.currentText().strip())
+        self._settings.setValue("serial/baud_rate", self.baud_combo.currentText().strip())
+        if self._recording_path is not None:
+            self._settings.setValue("recording/path", str(self._recording_path))
 
 
 def main() -> int:
