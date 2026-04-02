@@ -10,6 +10,45 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
 - Streams JSON lines that a future PC tool can use for replay, visualization, or audio-style rendering
 - Supports USB CDC on dual-CDC channel `1` and BLE serial
 
+## Screenshots
+
+### Flipper app
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="https://github.com/jsammarco/FlipRSDR/blob/main/screenshots/flipper%20screenshots/Freq%20Menu.png?raw=true" alt="Frequency menu" width="260" />
+    </td>
+    <td align="center">
+      <img src="https://github.com/jsammarco/FlipRSDR/blob/main/screenshots/flipper%20screenshots/Menu%20Page%202.png?raw=true" alt="Menu page 2" width="260" />
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      Frequency menu
+    </td>
+    <td align="center">
+      Menu page 2
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="https://github.com/jsammarco/FlipRSDR/blob/main/screenshots/flipper%20screenshots/Scanning%20Screen.png?raw=true" alt="Scanning screen" width="260" />
+    </td>
+    <td></td>
+  </tr>
+  <tr>
+    <td align="center">
+      Scanning screen
+    </td>
+    <td></td>
+  </tr>
+</table>
+
+### Receiver app
+
+![FlipRSDR Receiver screenshot](https://github.com/jsammarco/FlipRSDR/blob/main/screenshots/receiver%20screeshots/receiver%20screenshot.jpg?raw=true)
+
 ## Main flow
 
 - `Start Capture`
@@ -131,8 +170,6 @@ The Windows desktop companion app lives under `receiver/` and is called `FlipRSD
 - Optional recording of completed bursts to JSONL
 - Optional audible playback of completed bursts
 - Automatic port refresh while disconnected, plus last-port recall on restart
-
-![FlipRSDR Receiver screenshot](receiver/ScreenShot.JPG)
 
 Build the Windows executable with:
 
