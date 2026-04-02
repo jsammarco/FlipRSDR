@@ -8,7 +8,7 @@ FlipRSDR Receiver is the PC-side companion app for the Flipper Zero `FlipRSDR` e
 - Waveform view of the current pulse/gap timing burst
 - Waterfall view using log-duration bins with SDR-style peak coloring
 - Recording completed bursts to JSONL for later analysis
-- Optional audible playback of completed bursts
+- Optional audible playback of completed bursts through the default Windows audio device
 
 ## Expected input
 

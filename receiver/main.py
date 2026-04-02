@@ -4,9 +4,11 @@ import io
 import json
 import math
 import sys
+import tempfile
 import threading
 import time
 import wave
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -44,10 +46,13 @@ APP_NAME = "FlipRSDR Receiver"
 DEFAULT_BAUD_RATE = 9600
 PORT_REFRESH_INTERVAL_MS = 5000
 WATERFALL_BINS = 512
-WATERFALL_ROWS = 320
+DEFAULT_WATERFALL_WINDOW_S = 30
+WATERFALL_WINDOW_OPTIONS_S = [10, 20, 30, 60, 120]
+WATERFALL_MAX_RENDER_ROWS = 512
 WATERFALL_MIN_US = 16.0
 WATERFALL_MAX_US = 65536.0
 WAVEFORM_UPDATE_INTERVAL_S = 0.05
+WATERFALL_REFRESH_INTERVAL_MS = 250
 
 
 @dataclass
@@ -264,12 +269,19 @@ class ReceiverMainWindow(QMainWindow):
         self._last_waveform_update = 0.0
         self._record_file_handle: io.TextIOWrapper | None = None
         self._recording_path: Path | None = None
-        self._waterfall_rows = np.zeros((WATERFALL_ROWS, WATERFALL_BINS), dtype=np.float32)
-        self._waterfall_count = 0
-        self._audio_wave_bytes: bytes | None = None
+        self._waterfall_window_s = DEFAULT_WATERFALL_WINDOW_S
+        self._waterfall_entries: deque[tuple[float, np.ndarray]] = deque()
+        self._audio_temp_dir = Path(tempfile.gettempdir()) / "FlipRSDRReceiverAudio"
+        self._audio_temp_dir.mkdir(parents=True, exist_ok=True)
+        self._audio_playback_index = 0
+        self._current_audio_path: Path | None = None
+        self._audio_lock = threading.Lock()
         self._port_refresh_timer = QTimer(self)
         self._port_refresh_timer.setInterval(PORT_REFRESH_INTERVAL_MS)
         self._port_refresh_timer.timeout.connect(self._refresh_ports_if_disconnected)
+        self._waterfall_timer = QTimer(self)
+        self._waterfall_timer.setInterval(WATERFALL_REFRESH_INTERVAL_MS)
+        self._waterfall_timer.timeout.connect(self._refresh_waterfall_window)
 
         pg.setConfigOptions(antialias=True, background="#05070a", foreground="#d8e1eb")
 
@@ -278,6 +290,7 @@ class ReceiverMainWindow(QMainWindow):
         self._refresh_ports()
         self._update_connection_ui(False)
         self._port_refresh_timer.start()
+        self._waterfall_timer.start()
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -300,6 +313,8 @@ class ReceiverMainWindow(QMainWindow):
         self.view_combo = QComboBox()
         self.view_combo.addItems(["Waveform", "Waterfall"])
         self.view_combo.currentTextChanged.connect(self._sync_view_mode)
+        self.waterfall_window_combo = QComboBox()
+        self.waterfall_window_combo.addItems([f"{seconds}s" for seconds in WATERFALL_WINDOW_OPTIONS_S])
         self.audio_checkbox = QCheckBox("Audio")
         self.record_button = QPushButton("Start Recording")
         self.record_button.setCheckable(True)
@@ -308,6 +323,8 @@ class ReceiverMainWindow(QMainWindow):
 
         self.refresh_ports_button.clicked.connect(self._refresh_ports)
         self.connect_button.clicked.connect(self._toggle_connection)
+        self.audio_checkbox.toggled.connect(self._on_audio_toggled)
+        self.waterfall_window_combo.currentTextChanged.connect(self._on_waterfall_window_changed)
         self.record_button.toggled.connect(self._toggle_recording)
         self.choose_recording_button.clicked.connect(self._choose_recording_folder)
         self.clear_waterfall_button.clicked.connect(self._clear_waterfall)
@@ -325,6 +342,8 @@ class ReceiverMainWindow(QMainWindow):
         control_row.addSpacing(16)
         control_row.addWidget(QLabel("View"))
         control_row.addWidget(self.view_combo)
+        control_row.addWidget(QLabel("Window"))
+        control_row.addWidget(self.waterfall_window_combo)
         control_row.addWidget(self.audio_checkbox)
         control_row.addWidget(self.record_button)
         control_row.addWidget(self.choose_recording_button)
@@ -408,7 +427,9 @@ class ReceiverMainWindow(QMainWindow):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._save_ui_settings()
         self._disconnect_receiver()
+        self._stop_audio_playback()
         self._stop_recording()
+        self._cleanup_audio_temp_files()
         super().closeEvent(event)
 
     def focusInEvent(self, event) -> None:  # type: ignore[override]
@@ -496,6 +517,7 @@ class ReceiverMainWindow(QMainWindow):
         self._receiver_thread.stop()
         self._receiver_thread.wait(1500)
         self._receiver_thread = None
+        self._stop_audio_playback()
         self._update_connection_ui(False)
 
     def _update_connection_ui(self, connected: bool) -> None:
@@ -511,6 +533,18 @@ class ReceiverMainWindow(QMainWindow):
     def _on_baud_selection_changed(self, baud_rate: str) -> None:
         if baud_rate.strip():
             self._settings.setValue("serial/baud_rate", baud_rate.strip())
+
+    def _on_audio_toggled(self, enabled: bool) -> None:
+        if not enabled:
+            self._stop_audio_playback()
+
+    def _on_waterfall_window_changed(self, text: str) -> None:
+        window_text = text.strip().rstrip("s")
+        if not window_text:
+            return
+        self._waterfall_window_s = max(1, int(window_text))
+        self._settings.setValue("waterfall/window_s", self._waterfall_window_s)
+        self._refresh_waterfall_window()
 
     def _on_status_changed(self, text: str) -> None:
         self.connection_value.setText(text)
@@ -626,23 +660,34 @@ class ReceiverMainWindow(QMainWindow):
             row /= row.max()
         row = np.sqrt(row)
 
-        self._waterfall_rows = np.roll(self._waterfall_rows, -1, axis=0)
-        self._waterfall_rows[-1, :] = row
-        self._waterfall_count = min(self._waterfall_count + 1, WATERFALL_ROWS)
+        self._waterfall_entries.append((time.monotonic(), row))
+        while len(self._waterfall_entries) > WATERFALL_MAX_RENDER_ROWS:
+            self._waterfall_entries.popleft()
+        self._refresh_waterfall_window()
 
-        active_rows = self._waterfall_rows[-self._waterfall_count :, :]
+    def _refresh_waterfall_window(self) -> None:
+        cutoff = time.monotonic() - float(self._waterfall_window_s)
+        while self._waterfall_entries and self._waterfall_entries[0][0] < cutoff:
+            self._waterfall_entries.popleft()
+
+        if not self._waterfall_entries:
+            self.waterfall_image.setImage(np.zeros((1, WATERFALL_BINS), dtype=np.float32), autoLevels=False)
+            self.waterfall_plot.setLimits(xMin=0, xMax=WATERFALL_BINS, yMin=0, yMax=1)
+            return
+
+        recent_entries = list(self._waterfall_entries)[-WATERFALL_MAX_RENDER_ROWS:]
+        active_rows = np.vstack([entry[1] for entry in recent_entries])
         self.waterfall_image.setImage(active_rows, autoLevels=False)
         self.waterfall_plot.setLimits(
             xMin=0,
             xMax=WATERFALL_BINS,
             yMin=0,
-            yMax=max(self._waterfall_count, 1),
+            yMax=max(active_rows.shape[0], 1),
         )
 
     def _clear_waterfall(self) -> None:
-        self._waterfall_rows.fill(0.0)
-        self._waterfall_count = 0
-        self.waterfall_image.setImage(self._waterfall_rows[:1, :], autoLevels=False)
+        self._waterfall_entries.clear()
+        self._refresh_waterfall_window()
 
     def _sync_view_mode(self, mode: str) -> None:
         if mode == "Waterfall":
@@ -706,15 +751,36 @@ class ReceiverMainWindow(QMainWindow):
         if winsound is None or not burst.timings:
             return
 
-        def _play() -> None:
-            wave_bytes = self._burst_to_wave_bytes(burst)
-            if wave_bytes:
-                self._audio_wave_bytes = wave_bytes
-                winsound.PlaySound(
-                    self._audio_wave_bytes, winsound.SND_MEMORY | winsound.SND_ASYNC
-                )
+        wave_bytes = self._burst_to_wave_bytes(burst)
+        if wave_bytes:
+            self._play_wave_bytes(wave_bytes)
 
-        threading.Thread(target=_play, daemon=True).start()
+    def _play_wave_bytes(self, wave_bytes: bytes) -> None:
+        with self._audio_lock:
+            self._audio_playback_index += 1
+            audio_path = self._audio_temp_dir / f"burst_{self._audio_playback_index:08d}.wav"
+            audio_path.write_bytes(wave_bytes)
+            self._current_audio_path = audio_path
+
+        winsound.PlaySound(
+            str(audio_path),
+            winsound.SND_FILENAME | winsound.SND_ASYNC,
+        )
+
+    def _stop_audio_playback(self) -> None:
+        if winsound is None:
+            return
+        winsound.PlaySound(None, 0)
+
+    def _cleanup_audio_temp_files(self) -> None:
+        if not self._audio_temp_dir.exists():
+            return
+
+        for path in self._audio_temp_dir.glob("*.wav"):
+            try:
+                path.unlink()
+            except OSError:
+                continue
 
     def _burst_to_wave_bytes(self, burst: BurstData) -> bytes:
         sample_rate = 22050
@@ -746,6 +812,15 @@ class ReceiverMainWindow(QMainWindow):
         if baud_index >= 0:
             self.baud_combo.setCurrentIndex(baud_index)
 
+        saved_waterfall_window = int(
+            self._settings.value("waterfall/window_s", DEFAULT_WATERFALL_WINDOW_S, type=int)
+        )
+        if saved_waterfall_window in WATERFALL_WINDOW_OPTIONS_S:
+            self._waterfall_window_s = saved_waterfall_window
+            self.waterfall_window_combo.setCurrentText(f"{saved_waterfall_window}s")
+        else:
+            self.waterfall_window_combo.setCurrentText(f"{DEFAULT_WATERFALL_WINDOW_S}s")
+
         saved_recording_path = str(self._settings.value("recording/path", "", type=str)).strip()
         if saved_recording_path:
             self._recording_path = Path(saved_recording_path)
@@ -753,6 +828,7 @@ class ReceiverMainWindow(QMainWindow):
     def _save_ui_settings(self) -> None:
         self._settings.setValue("serial/last_port", self.port_combo.currentText().strip())
         self._settings.setValue("serial/baud_rate", self.baud_combo.currentText().strip())
+        self._settings.setValue("waterfall/window_s", self._waterfall_window_s)
         if self._recording_path is not None:
             self._settings.setValue("recording/path", str(self._recording_path))
 
