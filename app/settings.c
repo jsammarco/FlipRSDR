@@ -59,6 +59,14 @@ static const char* fliprsdr_gap_threshold_labels[] = {
     "200 ms",
 };
 
+static const uint16_t fliprsdr_preview_bandwidth_options[] = {50, 100, 200, 400};
+static const char* fliprsdr_preview_bandwidth_labels[] = {
+    "50 kHz",
+    "100 kHz",
+    "200 kHz",
+    "400 kHz",
+};
+
 #define FLIPRSDR_FREQUENCY_OFFSET_OPTIONS_COUNT \
     (((FLIPRSDR_FREQUENCY_OFFSET_MAX_KHZ - FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ) / \
       FLIPRSDR_FREQUENCY_OFFSET_STEP_KHZ) + \
@@ -76,6 +84,7 @@ void fliprsdr_settings_load_defaults(FlipRSDRSettings* settings) {
     settings->max_pulse_count = 2048;
     settings->capture_timeout_ms = 250;
     settings->gap_threshold_ms = 20;
+    settings->preview_bandwidth_khz = 100;
 }
 
 void fliprsdr_settings_validate(FlipRSDRSettings* settings) {
@@ -110,6 +119,9 @@ void fliprsdr_settings_validate(FlipRSDRSettings* settings) {
     settings->gap_threshold_ms =
         fliprsdr_settings_gap_threshold_value(
             fliprsdr_settings_gap_threshold_index(settings->gap_threshold_ms));
+    settings->preview_bandwidth_khz =
+        fliprsdr_settings_preview_bandwidth_value(
+            fliprsdr_settings_preview_bandwidth_index(settings->preview_bandwidth_khz));
 
     if(settings->capture_timeout_ms < settings->gap_threshold_ms) {
         settings->capture_timeout_ms = settings->gap_threshold_ms;
@@ -291,6 +303,31 @@ uint8_t fliprsdr_settings_gap_threshold_index(uint16_t value) {
     for(uint8_t i = 0; i < COUNT_OF(fliprsdr_gap_threshold_options); i++) {
         if(fliprsdr_gap_threshold_options[i] == value) return i;
         if(fliprsdr_gap_threshold_options[i] < value) best_index = i;
+    }
+    return best_index;
+}
+
+uint8_t fliprsdr_settings_preview_bandwidth_options_count(void) {
+    return COUNT_OF(fliprsdr_preview_bandwidth_options);
+}
+
+uint16_t fliprsdr_settings_preview_bandwidth_value(uint8_t index) {
+    if(index >= COUNT_OF(fliprsdr_preview_bandwidth_options)) {
+        index = 1U;
+    }
+    return fliprsdr_preview_bandwidth_options[index];
+}
+
+const char* fliprsdr_settings_preview_bandwidth_label(uint8_t index) {
+    if(index >= COUNT_OF(fliprsdr_preview_bandwidth_labels)) return "?";
+    return fliprsdr_preview_bandwidth_labels[index];
+}
+
+uint8_t fliprsdr_settings_preview_bandwidth_index(uint16_t value) {
+    uint8_t best_index = 0U;
+    for(uint8_t i = 0; i < COUNT_OF(fliprsdr_preview_bandwidth_options); i++) {
+        if(fliprsdr_preview_bandwidth_options[i] == value) return i;
+        if(fliprsdr_preview_bandwidth_options[i] < value) best_index = i;
     }
     return best_index;
 }

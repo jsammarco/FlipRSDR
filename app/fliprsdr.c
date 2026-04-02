@@ -70,6 +70,7 @@ static FlipRSDRApp* fliprsdr_app_alloc(void) {
     app->variable_item_list = variable_item_list_alloc();
     app->about_widget = widget_alloc();
     app->capture_view = fliprsdr_capture_view_alloc();
+    app->preview_view = fliprsdr_preview_view_alloc();
     app->transport = fliprsdr_transport_alloc();
     app->capture = fliprsdr_capture_alloc(app->transport);
     app->settings_dirty = false;
@@ -99,6 +100,10 @@ static FlipRSDRApp* fliprsdr_app_alloc(void) {
         app->view_dispatcher,
         FlipRSDRViewCapture,
         fliprsdr_capture_view_get_view(app->capture_view));
+    view_dispatcher_add_view(
+        app->view_dispatcher,
+        FlipRSDRViewPreview,
+        fliprsdr_preview_view_get_view(app->preview_view));
 
     fliprsdr_capture_view_set_action_callback(
         app->capture_view, fliprsdr_capture_view_action_callback, app);
@@ -111,11 +116,13 @@ static void fliprsdr_app_free(FlipRSDRApp* app) {
     fliprsdr_capture_stop(app->capture);
 
     view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewCapture);
+    view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewPreview);
     view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewAbout);
     view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewSettings);
     view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewSubmenu);
 
     fliprsdr_capture_view_free(app->capture_view);
+    fliprsdr_preview_view_free(app->preview_view);
     widget_free(app->about_widget);
     variable_item_list_free(app->variable_item_list);
     submenu_free(app->submenu);

@@ -5,6 +5,7 @@
 #include "settings.h"
 #include "transport.h"
 #include "../views/capture_view.h"
+#include "../views/preview_view.h"
 #include "../scenes/scenes.h"
 
 #include <gui/view_dispatcher.h>
@@ -16,12 +17,14 @@
 typedef enum {
     FlipRSDRViewSubmenu,
     FlipRSDRViewCapture,
+    FlipRSDRViewPreview,
     FlipRSDRViewSettings,
     FlipRSDRViewAbout,
 } FlipRSDRView;
 
 typedef enum {
     FlipRSDRCustomEventMenuCapture = 1,
+    FlipRSDRCustomEventMenuPreview,
     FlipRSDRCustomEventMenuSettings,
     FlipRSDRCustomEventMenuAbout,
     FlipRSDRCustomEventCaptureToggle,
@@ -38,6 +41,7 @@ typedef struct {
     VariableItemList* variable_item_list;
     Widget* about_widget;
     FlipRSDRCaptureView* capture_view;
+    FlipRSDRPreviewView* preview_view;
     FlipRSDRSettings settings;
     bool settings_dirty;
     bool transport_dirty;

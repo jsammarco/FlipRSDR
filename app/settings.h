@@ -39,6 +39,11 @@ uint16_t fliprsdr_settings_gap_threshold_value(uint8_t index);
 const char* fliprsdr_settings_gap_threshold_label(uint8_t index);
 uint8_t fliprsdr_settings_gap_threshold_index(uint16_t value);
 
+uint8_t fliprsdr_settings_preview_bandwidth_options_count(void);
+uint16_t fliprsdr_settings_preview_bandwidth_value(uint8_t index);
+const char* fliprsdr_settings_preview_bandwidth_label(uint8_t index);
+uint8_t fliprsdr_settings_preview_bandwidth_index(uint16_t value);
+
 #ifdef __cplusplus
 }
 #endif

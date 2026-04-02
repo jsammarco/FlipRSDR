@@ -2,6 +2,7 @@
 
 enum {
     FlipRSDRStartMenuCapture = 0,
+    FlipRSDRStartMenuPreview,
     FlipRSDRStartMenuSettings,
     FlipRSDRStartMenuAbout,
 };
@@ -11,6 +12,9 @@ static void fliprsdr_scene_start_submenu_callback(void* context, uint32_t index)
     switch(index) {
     case FlipRSDRStartMenuCapture:
         view_dispatcher_send_custom_event(app->view_dispatcher, FlipRSDRCustomEventMenuCapture);
+        break;
+    case FlipRSDRStartMenuPreview:
+        view_dispatcher_send_custom_event(app->view_dispatcher, FlipRSDRCustomEventMenuPreview);
         break;
     case FlipRSDRStartMenuSettings:
         view_dispatcher_send_custom_event(app->view_dispatcher, FlipRSDRCustomEventMenuSettings);
@@ -34,6 +38,12 @@ void fliprsdr_scene_start_on_enter(void* context) {
         app);
     submenu_add_item(
         app->submenu,
+        "Signal Preview",
+        FlipRSDRStartMenuPreview,
+        fliprsdr_scene_start_submenu_callback,
+        app);
+    submenu_add_item(
+        app->submenu,
         "Settings",
         FlipRSDRStartMenuSettings,
         fliprsdr_scene_start_submenu_callback,
@@ -50,6 +60,9 @@ bool fliprsdr_scene_start_on_event(void* context, SceneManagerEvent event) {
         switch(event.event) {
         case FlipRSDRCustomEventMenuCapture:
             scene_manager_next_scene(app->scene_manager, FlipRSDRSceneCapture);
+            return true;
+        case FlipRSDRCustomEventMenuPreview:
+            scene_manager_next_scene(app->scene_manager, FlipRSDRScenePreview);
             return true;
         case FlipRSDRCustomEventMenuSettings:
             scene_manager_next_scene(app->scene_manager, FlipRSDRSceneSettings);

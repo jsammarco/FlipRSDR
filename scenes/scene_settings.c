@@ -11,6 +11,7 @@ enum {
     FlipRSDRSettingsItemMaxPulses,
     FlipRSDRSettingsItemTimeout,
     FlipRSDRSettingsItemGapThreshold,
+    FlipRSDRSettingsItemPreviewBand,
     FlipRSDRSettingsItemDebugSend,
 };
 
@@ -96,6 +97,14 @@ static void fliprsdr_scene_settings_gap_threshold_changed(VariableItem* item) {
     const uint8_t index = variable_item_get_current_value_index(item);
     app->settings.gap_threshold_ms = fliprsdr_settings_gap_threshold_value(index);
     variable_item_set_current_value_text(item, fliprsdr_settings_gap_threshold_label(index));
+    app->settings_dirty = true;
+}
+
+static void fliprsdr_scene_settings_preview_bandwidth_changed(VariableItem* item) {
+    FlipRSDRApp* app = variable_item_get_context(item);
+    const uint8_t index = variable_item_get_current_value_index(item);
+    app->settings.preview_bandwidth_khz = fliprsdr_settings_preview_bandwidth_value(index);
+    variable_item_set_current_value_text(item, fliprsdr_settings_preview_bandwidth_label(index));
     app->settings_dirty = true;
 }
 
@@ -224,6 +233,20 @@ void fliprsdr_scene_settings_on_enter(void* context) {
         item,
         fliprsdr_settings_gap_threshold_label(
             fliprsdr_settings_gap_threshold_index(app->settings.gap_threshold_ms)));
+
+    item = variable_item_list_add(
+        app->variable_item_list,
+        "Band span",
+        fliprsdr_settings_preview_bandwidth_options_count(),
+        fliprsdr_scene_settings_preview_bandwidth_changed,
+        app);
+    variable_item_set_current_value_index(
+        item,
+        fliprsdr_settings_preview_bandwidth_index(app->settings.preview_bandwidth_khz));
+    variable_item_set_current_value_text(
+        item,
+        fliprsdr_settings_preview_bandwidth_label(
+            fliprsdr_settings_preview_bandwidth_index(app->settings.preview_bandwidth_khz)));
 
     item = variable_item_list_add(app->variable_item_list, "Debug send", 1, NULL, app);
     variable_item_set_current_value_index(item, 0U);

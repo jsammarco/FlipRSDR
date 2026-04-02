@@ -11,12 +11,13 @@ extern "C" {
 
 #define FLIPRSDR_SETTINGS_PATH                  APP_DATA_PATH("fliprsdr.settings")
 #define FLIPRSDR_SETTINGS_MAGIC                 0x52U
-#define FLIPRSDR_SETTINGS_VERSION               2U
+#define FLIPRSDR_SETTINGS_VERSION               3U
 #define FLIPRSDR_BURST_TIMINGS_CAPACITY         8192U
 #define FLIPRSDR_CAPTURE_STREAM_DEPTH           2048U
 #define FLIPRSDR_PROTOCOL_LINE_MAX              256U
 #define FLIPRSDR_PROTOCOL_CHUNK_TIMINGS         16U
 #define FLIPRSDR_TRANSPORT_QUEUE_DEPTH          16U
+#define FLIPRSDR_PREVIEW_GRAPH_POINTS           48U
 #define FLIPRSDR_USB_VCP_CHANNEL                1U
 #define FLIPRSDR_USB_SEND_TIMEOUT_MS            200U
 #define FLIPRSDR_BLE_SEND_TIMEOUT_MS            750U
@@ -73,6 +74,7 @@ typedef struct {
     uint16_t max_pulse_count;
     uint16_t capture_timeout_ms;
     uint16_t gap_threshold_ms;
+    uint16_t preview_bandwidth_khz;
 } FlipRSDRSettings;
 
 typedef struct {

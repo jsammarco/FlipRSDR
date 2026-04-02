@@ -10,14 +10,10 @@ void fliprsdr_scene_about_on_enter(void* context) {
         128,
         64,
         "FlipRSDR\n\n"
-        "Remote RF pulse capture for Flipper Zero.\n\n"
-        "Captures raw demodulated pulse/gap timings with the async Sub-GHz receive API and streams"
-        " them over USB CDC or BLE serial.\n\n"
-        "Controls:\n"
-        "OK start/stop\n"
-        "Left clear buffered burst\n"
-        "Right send buffered burst\n\n"
-        "Designed for PC-side waveform reconstruction, replay, and analysis.");
+        "Sub-GHz pulse capture and preview for Flipper Zero.\n\n"
+        "Created by ConsultingJoe.com\n\n"
+        "Use Signal Preview to scan the current band, then Start Capture to stream bursts to your"
+        " PC.");
     view_dispatcher_switch_to_view(app->view_dispatcher, FlipRSDRViewAbout);
 }
 
