@@ -1,0 +1,10 @@
+App(
+    appid="fliprsdr",
+    name="FlipRSDR",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="fliprsdr_app",
+    fap_category="Tools",
+    fap_version="0.1",
+    fap_description="Capture raw Sub-GHz pulse timing bursts and stream them to a PC.",
+    stack_size=8192,
+)
