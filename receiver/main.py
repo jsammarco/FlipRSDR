@@ -670,19 +670,26 @@ class ReceiverMainWindow(QMainWindow):
         while self._waterfall_entries and self._waterfall_entries[0][0] < cutoff:
             self._waterfall_entries.popleft()
 
+        canvas = np.zeros((WATERFALL_MAX_RENDER_ROWS, WATERFALL_BINS), dtype=np.float32)
         if not self._waterfall_entries:
-            self.waterfall_image.setImage(np.zeros((1, WATERFALL_BINS), dtype=np.float32), autoLevels=False)
-            self.waterfall_plot.setLimits(xMin=0, xMax=WATERFALL_BINS, yMin=0, yMax=1)
+            self.waterfall_image.setImage(canvas, autoLevels=False)
+            self.waterfall_plot.setLimits(
+                xMin=0,
+                xMax=WATERFALL_BINS,
+                yMin=0,
+                yMax=WATERFALL_MAX_RENDER_ROWS,
+            )
             return
 
         recent_entries = list(self._waterfall_entries)[-WATERFALL_MAX_RENDER_ROWS:]
         active_rows = np.vstack([entry[1] for entry in recent_entries])
-        self.waterfall_image.setImage(active_rows, autoLevels=False)
+        canvas[-active_rows.shape[0] :, :] = active_rows
+        self.waterfall_image.setImage(canvas, autoLevels=False)
         self.waterfall_plot.setLimits(
             xMin=0,
             xMax=WATERFALL_BINS,
             yMin=0,
-            yMax=max(active_rows.shape[0], 1),
+            yMax=WATERFALL_MAX_RENDER_ROWS,
         )
 
     def _clear_waterfall(self) -> None:
