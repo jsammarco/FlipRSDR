@@ -4,7 +4,7 @@
 
 #define ADD_SCENE(prefix, name, id) FlipRSDRScene##id,
 typedef enum {
-#include "../scene_config.h"
+#include "../app/scene_config.h"
     FlipRSDRSceneCount,
 } FlipRSDRScene;
 #undef ADD_SCENE
@@ -12,14 +12,14 @@ typedef enum {
 extern const SceneManagerHandlers fliprsdr_scene_handlers;
 
 #define ADD_SCENE(prefix, name, id) void prefix##_scene_##name##_on_enter(void*);
-#include "../scene_config.h"
+#include "../app/scene_config.h"
 #undef ADD_SCENE
 
 #define ADD_SCENE(prefix, name, id) \
     bool prefix##_scene_##name##_on_event(void* context, SceneManagerEvent event);
-#include "../scene_config.h"
+#include "../app/scene_config.h"
 #undef ADD_SCENE
 
 #define ADD_SCENE(prefix, name, id) void prefix##_scene_##name##_on_exit(void*);
-#include "../scene_config.h"
+#include "../app/scene_config.h"
 #undef ADD_SCENE

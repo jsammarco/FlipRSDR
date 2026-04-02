@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../fliprsdr.h"
+#include "../app/fliprsdr.h"
 #include <gui/view.h>
 
 typedef enum {

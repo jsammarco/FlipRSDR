@@ -1,6 +1,6 @@
 #include "capture_view.h"
 
-#include "../settings.h"
+#include "../app/settings.h"
 
 #include <gui/elements.h>
 #include <input/input.h>

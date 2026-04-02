@@ -2,19 +2,19 @@
 
 #define ADD_SCENE(prefix, name, id) prefix##_scene_##name##_on_enter,
 void (*const fliprsdr_scene_on_enter_handlers[])(void*) = {
-#include "../scene_config.h"
+#include "../app/scene_config.h"
 };
 #undef ADD_SCENE
 
 #define ADD_SCENE(prefix, name, id) prefix##_scene_##name##_on_event,
 bool (*const fliprsdr_scene_on_event_handlers[])(void* context, SceneManagerEvent event) = {
-#include "../scene_config.h"
+#include "../app/scene_config.h"
 };
 #undef ADD_SCENE
 
 #define ADD_SCENE(prefix, name, id) prefix##_scene_##name##_on_exit,
 void (*const fliprsdr_scene_on_exit_handlers[])(void* context) = {
-#include "../scene_config.h"
+#include "../app/scene_config.h"
 };
 #undef ADD_SCENE
 

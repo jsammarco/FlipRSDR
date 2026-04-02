@@ -1,4 +1,4 @@
-#include "../fliprsdr_app.h"
+#include "../app/fliprsdr_app.h"
 
 void fliprsdr_scene_capture_on_enter(void* context) {
     FlipRSDRApp* app = context;

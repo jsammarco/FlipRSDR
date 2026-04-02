@@ -1,4 +1,4 @@
-#include "../fliprsdr_app.h"
+#include "../app/fliprsdr_app.h"
 
 enum {
     FlipRSDRStartMenuCapture = 0,

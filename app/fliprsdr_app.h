@@ -4,8 +4,8 @@
 #include "capture.h"
 #include "settings.h"
 #include "transport.h"
-#include "views/capture_view.h"
-#include "scenes/scenes.h"
+#include "../views/capture_view.h"
+#include "../scenes/scenes.h"
 
 #include <gui/view_dispatcher.h>
 #include <gui/modules/submenu.h>

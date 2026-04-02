@@ -94,25 +94,25 @@ Buffered send emits:
 
 ## File structure
 
-- `fliprsdr.c`
+- `app/fliprsdr.c`
   - App allocation, view dispatcher, scene manager, and shared refresh helpers
-- `fliprsdr.h`
+- `app/fliprsdr.h`
   - Shared enums, constants, settings, burst, and snapshot structs
-- `fliprsdr_app.h`
+- `app/fliprsdr_app.h`
   - Internal app struct, view ids, and custom events
-- `settings.c` / `settings.h`
+- `app/settings.c` / `app/settings.h`
   - Persistent settings using `saved_struct`
-- `burst_buffer.c` / `burst_buffer.h`
+- `app/burst_buffer.c` / `app/burst_buffer.h`
   - Fixed-capacity burst storage with truncation tracking
-- `capture.c` / `capture.h`
+- `app/capture.c` / `app/capture.h`
   - Raw async Sub-GHz receive worker and burst assembly
-- `transport.c` / `transport.h`
+- `app/transport.c` / `app/transport.h`
   - Shared transport thread and backend selection
-- `transport_usb.c`
+- `app/transport_usb.c`
   - USB CDC transport backend
-- `transport_ble.c`
+- `app/transport_ble.c`
   - BLE serial transport backend
-- `protocol.c` / `protocol.h`
+- `app/protocol.c` / `app/protocol.h`
   - JSON formatting and buffered capture serialization
 - `views/capture_view.c` / `views/capture_view.h`
   - Custom capture status screen
