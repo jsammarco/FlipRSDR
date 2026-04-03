@@ -53,6 +53,10 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
 
 ![FlipRSDR Receiver screenshot](https://raw.githubusercontent.com/jsammarco/FlipRSDR/refs/heads/main/screenshots/receiver%20screeshots/receiver%20screenshot.jpg)
 
+### Analyzer app
+
+![FlipRSDR Analyzer screenshot](https://raw.githubusercontent.com/jsammarco/FlipRSDR/refs/heads/main/screenshots/analyzer/analyzer%20screenshot.jpg)
+
 ## Main flow
 
 - `Start Capture`
@@ -185,4 +189,26 @@ The build script writes the final executable to:
 
 ```text
 build\FlipRSDR Receiver.exe
+```
+
+## PC analyzer
+
+The offline analysis companion app lives under `analyzer/` and is called `FlipRSDR Analyzer`.
+
+- Loads saved JSONL recordings from the receiver
+- Replays bursts over recording time with optional audio playback
+- Shows waveform and a full recording waterfall view
+- Highlights repeated timing signatures and likely frame-like bursts
+- Attempts a lightweight short/long symbol decode for bursts that resemble simple PWM-style framing
+
+Build the Windows executable with:
+
+```powershell
+.\build_analyzer.ps1
+```
+
+The build script writes the final executable to:
+
+```text
+build\FlipRSDR Analyzer.exe
 ```

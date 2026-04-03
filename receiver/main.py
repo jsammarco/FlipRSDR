@@ -53,6 +53,7 @@ WATERFALL_MIN_US = 16.0
 WATERFALL_MAX_US = 65536.0
 WAVEFORM_UPDATE_INTERVAL_S = 0.05
 WATERFALL_REFRESH_INTERVAL_MS = 250
+WATERFALL_X_TICKS_US = [16, 32, 64, 128, 256, 512, 1000, 2000, 4000, 8000, 16000, 32000, 65536]
 
 
 @dataclass
@@ -382,14 +383,14 @@ class ReceiverMainWindow(QMainWindow):
         main_layout.addWidget(stats_container)
 
         self.waveform_plot = pg.PlotWidget()
-        self.waveform_plot.setLabel("bottom", "Time", units="ms")
-        self.waveform_plot.setLabel("left", "Logic level")
+        self.waveform_plot.setLabel("bottom", "Elapsed time", units="ms")
+        self.waveform_plot.setLabel("left", "Signal state")
         self.waveform_plot.showGrid(x=True, y=True, alpha=0.28)
         self.waveform_curve = self.waveform_plot.plot(pen=pg.mkPen("#5dd4ff", width=1.6))
 
         self.waterfall_plot = pg.PlotWidget()
-        self.waterfall_plot.setLabel("bottom", "Timing duration", units="log2(us)")
-        self.waterfall_plot.setLabel("left", "Burst history")
+        self.waterfall_plot.setLabel("bottom", "Pulse / gap duration", units="us")
+        self.waterfall_plot.setLabel("left", "Recent bursts")
         self.waterfall_plot.showGrid(x=False, y=False)
         self.waterfall_image = pg.ImageItem(axisOrder="row-major")
         self.waterfall_plot.addItem(self.waterfall_image)
@@ -397,6 +398,7 @@ class ReceiverMainWindow(QMainWindow):
         self.waterfall_plot.setMenuEnabled(False)
         self.waterfall_image.setLookupTable(self._build_sdr_lut())
         self.waterfall_image.setLevels((0.0, 1.0))
+        self._configure_waterfall_axes()
 
         self.plot_stack = QWidget()
         stack_layout = QVBoxLayout(self.plot_stack)
@@ -460,6 +462,21 @@ class ReceiverMainWindow(QMainWindow):
         for channel in range(3):
             lut[:, channel] = np.interp(x, stops, colors[:, channel]).astype(np.uint8)
         return lut
+
+    def _configure_waterfall_axes(self) -> None:
+        tick_spacing = math.log2(WATERFALL_MAX_US) - math.log2(WATERFALL_MIN_US)
+        ticks: list[tuple[float, str]] = []
+        for duration_us in WATERFALL_X_TICKS_US:
+            position = WATERFALL_BINS * (
+                (math.log2(float(duration_us)) - math.log2(WATERFALL_MIN_US)) / tick_spacing
+            )
+            if duration_us >= 1000:
+                label = f"{duration_us / 1000:.0f} ms"
+            else:
+                label = f"{duration_us:g} us"
+            ticks.append((position, label))
+
+        self.waterfall_plot.getAxis("bottom").setTicks([ticks])
 
     def _refresh_ports(self) -> None:
         preferred_port = self.port_combo.currentText().strip()
@@ -670,26 +687,21 @@ class ReceiverMainWindow(QMainWindow):
         while self._waterfall_entries and self._waterfall_entries[0][0] < cutoff:
             self._waterfall_entries.popleft()
 
-        canvas = np.zeros((WATERFALL_MAX_RENDER_ROWS, WATERFALL_BINS), dtype=np.float32)
         if not self._waterfall_entries:
+            canvas = np.zeros((1, WATERFALL_BINS), dtype=np.float32)
             self.waterfall_image.setImage(canvas, autoLevels=False)
-            self.waterfall_plot.setLimits(
-                xMin=0,
-                xMax=WATERFALL_BINS,
-                yMin=0,
-                yMax=WATERFALL_MAX_RENDER_ROWS,
-            )
+            self.waterfall_image.setRect(0.0, 0.0, float(WATERFALL_BINS), 1.0)
+            self.waterfall_plot.setLimits(xMin=0, xMax=WATERFALL_BINS, yMin=0, yMax=1)
+            self.waterfall_plot.setRange(xRange=(0, WATERFALL_BINS), yRange=(0, 1), padding=0.0)
             return
 
         recent_entries = list(self._waterfall_entries)[-WATERFALL_MAX_RENDER_ROWS:]
-        active_rows = np.vstack([entry[1] for entry in recent_entries])
-        canvas[-active_rows.shape[0] :, :] = active_rows
+        canvas = np.vstack([entry[1] for entry in recent_entries])
         self.waterfall_image.setImage(canvas, autoLevels=False)
-        self.waterfall_plot.setLimits(
-            xMin=0,
-            xMax=WATERFALL_BINS,
-            yMin=0,
-            yMax=WATERFALL_MAX_RENDER_ROWS,
+        self.waterfall_image.setRect(0.0, 0.0, float(WATERFALL_BINS), float(canvas.shape[0]))
+        self.waterfall_plot.setLimits(xMin=0, xMax=WATERFALL_BINS, yMin=0, yMax=canvas.shape[0])
+        self.waterfall_plot.setRange(
+            xRange=(0, WATERFALL_BINS), yRange=(0, canvas.shape[0]), padding=0.0
         )
 
     def _clear_waterfall(self) -> None:

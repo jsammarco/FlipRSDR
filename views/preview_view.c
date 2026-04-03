@@ -8,7 +8,7 @@
 #include <input/input.h>
 #include <lib/subghz/devices/cc1101_configs.h>
 
-#define FLIPRSDR_PREVIEW_TIMER_HZ 20U
+#define FLIPRSDR_PREVIEW_TIMER_HZ 40U
 #define FLIPRSDR_PREVIEW_RSSI_MIN (-110.0f)
 #define FLIPRSDR_PREVIEW_RSSI_MAX (-35.0f)
 
@@ -59,6 +59,21 @@ static uint32_t fliprsdr_preview_frequency_for_index(const FlipRSDRPreviewViewMo
     return model->start_frequency_hz + ((uint64_t)span_hz * index) / (model->active_points - 1U);
 }
 
+static bool fliprsdr_preview_start_rx_at(FlipRSDRPreviewViewModel* model, uint32_t frequency_hz) {
+    if(!furi_hal_subghz_is_frequency_valid(frequency_hz)) {
+        return false;
+    }
+
+    const uint32_t tuned_frequency_hz = furi_hal_subghz_set_frequency_and_path(frequency_hz);
+    if(!furi_hal_subghz_is_frequency_valid(tuned_frequency_hz)) {
+        return false;
+    }
+
+    model->current_frequency_hz = tuned_frequency_hz;
+    furi_hal_subghz_rx();
+    return true;
+}
+
 static void fliprsdr_preview_setup_model(FlipRSDRPreviewViewModel* model) {
     memset(model->rssi, 0, sizeof(model->rssi));
     model->sweep_index = 0U;
@@ -104,9 +119,8 @@ static void fliprsdr_preview_start(FlipRSDRPreviewView* preview_view) {
             fliprsdr_preview_setup_model(model);
             model->running = model->valid;
             if(model->valid) {
-                model->current_frequency_hz =
-                    furi_hal_subghz_set_frequency_and_path(model->current_frequency_hz);
-                furi_hal_subghz_rx();
+                model->running =
+                    fliprsdr_preview_start_rx_at(model, model->current_frequency_hz);
             }
         },
         true);
@@ -200,13 +214,12 @@ static void fliprsdr_preview_tick(void* context) {
             model->rssi[sample_index] = fliprsdr_preview_rssi_to_height(model->last_rssi);
 
             model->sweep_index = (sample_index + 1U) % model->active_points;
-            model->current_frequency_hz =
-                fliprsdr_preview_frequency_for_index(model, model->sweep_index);
-
             furi_hal_subghz_idle();
-            model->current_frequency_hz =
-                furi_hal_subghz_set_frequency_and_path(model->current_frequency_hz);
-            furi_hal_subghz_rx();
+            if(!fliprsdr_preview_start_rx_at(
+                   model, fliprsdr_preview_frequency_for_index(model, model->sweep_index))) {
+                model->running = false;
+                model->valid = false;
+            }
         },
         true);
 }
