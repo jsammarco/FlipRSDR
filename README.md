@@ -14,6 +14,8 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
 
 ### Flipper app
 
+![Set frequency page](https://raw.githubusercontent.com/jsammarco/FlipRSDR/refs/heads/main/screenshots/flipper%20screenshots/Set%20Freq%20Page..png)
+
 <table width="100%">
   <tr>
     <td align="center" width="50%">
