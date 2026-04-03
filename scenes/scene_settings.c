@@ -1,8 +1,8 @@
 #include "../app/fliprsdr_app.h"
 
 enum {
-    FlipRSDRSettingsItemFrequency = 0,
-    FlipRSDRSettingsItemFrequencyOffset,
+    FlipRSDRSettingsItemPreset = 0,
+    FlipRSDRSettingsItemFrequency,
     FlipRSDRSettingsItemTransport,
     FlipRSDRSettingsItemStreamMode,
     FlipRSDRSettingsItemAutoSend,
@@ -15,23 +15,17 @@ enum {
     FlipRSDRSettingsItemDebugSend,
 };
 
-static void fliprsdr_scene_settings_frequency_changed(VariableItem* item) {
+static void fliprsdr_scene_settings_frequency_preset_changed(VariableItem* item) {
     FlipRSDRApp* app = variable_item_get_context(item);
     const uint8_t index = variable_item_get_current_value_index(item);
-    app->settings.frequency_preset = index;
-    variable_item_set_current_value_text(item, fliprsdr_settings_frequency_label(index));
-    app->settings_dirty = true;
-}
 
-static void fliprsdr_scene_settings_frequency_offset_changed(VariableItem* item) {
-    FlipRSDRApp* app = variable_item_get_context(item);
-    const uint8_t index = variable_item_get_current_value_index(item);
-    char label[16];
+    if(index == 0U) {
+        variable_item_set_current_value_text(item, "Custom");
+        return;
+    }
 
-    app->settings.frequency_offset_khz = fliprsdr_settings_frequency_offset_value(index);
-    fliprsdr_settings_frequency_offset_label(
-        app->settings.frequency_offset_khz, label, sizeof(label));
-    variable_item_set_current_value_text(item, label);
+    app->settings.frequency_hz = fliprsdr_settings_frequency_value(index - 1U);
+    variable_item_set_current_value_text(item, fliprsdr_settings_frequency_label(index - 1U));
     app->settings_dirty = true;
 }
 
@@ -110,7 +104,11 @@ static void fliprsdr_scene_settings_preview_bandwidth_changed(VariableItem* item
 
 static void fliprsdr_scene_settings_enter_callback(void* context, uint32_t index) {
     FlipRSDRApp* app = context;
-    if(index == FlipRSDRSettingsItemDebugSend) {
+    scene_manager_set_scene_state(app->scene_manager, FlipRSDRSceneSettings, index);
+
+    if(index == FlipRSDRSettingsItemFrequency) {
+        scene_manager_next_scene(app->scene_manager, FlipRSDRSceneFrequencyInput);
+    } else if(index == FlipRSDRSettingsItemDebugSend) {
         fliprsdr_capture_send_debug_burst(app->capture);
     }
 }
@@ -126,26 +124,31 @@ void fliprsdr_scene_settings_on_enter(void* context) {
 
     item = variable_item_list_add(
         app->variable_item_list,
-        "Freq",
-        FlipRSDRFrequencyPresetCount,
-        fliprsdr_scene_settings_frequency_changed,
+        "Preset",
+        FlipRSDRFrequencyPresetCount + 1U,
+        fliprsdr_scene_settings_frequency_preset_changed,
         app);
-    variable_item_set_current_value_index(item, app->settings.frequency_preset);
-    variable_item_set_current_value_text(
-        item, fliprsdr_settings_frequency_label(app->settings.frequency_preset));
+    {
+        uint8_t preset_index = 0U;
+        for(uint8_t i = 0; i < FlipRSDRFrequencyPresetCount; i++) {
+            if(app->settings.frequency_hz == fliprsdr_settings_frequency_value(i)) {
+                preset_index = i + 1U;
+                break;
+            }
+        }
 
-    item = variable_item_list_add(
-        app->variable_item_list,
-        "Tune",
-        fliprsdr_settings_frequency_offset_options_count(),
-        fliprsdr_scene_settings_frequency_offset_changed,
-        app);
-    variable_item_set_current_value_index(
-        item, fliprsdr_settings_frequency_offset_index(app->settings.frequency_offset_khz));
+        variable_item_set_current_value_index(item, preset_index);
+        variable_item_set_current_value_text(
+            item,
+            preset_index == 0U ? "Custom" :
+                                 fliprsdr_settings_frequency_label(preset_index - 1U));
+    }
+
+    item = variable_item_list_add(app->variable_item_list, "Freq", 1, NULL, app);
+    variable_item_set_current_value_index(item, 0U);
     {
         char label[16];
-        fliprsdr_settings_frequency_offset_label(
-            app->settings.frequency_offset_khz, label, sizeof(label));
+        fliprsdr_settings_frequency_text(app->settings.frequency_hz, label, sizeof(label));
         variable_item_set_current_value_text(item, label);
     }
 
@@ -252,6 +255,9 @@ void fliprsdr_scene_settings_on_enter(void* context) {
     variable_item_set_current_value_index(item, 0U);
     variable_item_set_current_value_text(item, "Run");
 
+    variable_item_list_set_selected_item(
+        app->variable_item_list,
+        scene_manager_get_scene_state(app->scene_manager, FlipRSDRSceneSettings));
     view_dispatcher_switch_to_view(app->view_dispatcher, FlipRSDRViewSettings);
 }
 

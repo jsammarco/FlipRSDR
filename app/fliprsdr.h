@@ -11,7 +11,7 @@ extern "C" {
 
 #define FLIPRSDR_SETTINGS_PATH                  APP_DATA_PATH("fliprsdr.settings")
 #define FLIPRSDR_SETTINGS_MAGIC                 0x52U
-#define FLIPRSDR_SETTINGS_VERSION               3U
+#define FLIPRSDR_SETTINGS_VERSION               4U
 #define FLIPRSDR_BURST_TIMINGS_CAPACITY         8192U
 #define FLIPRSDR_CAPTURE_STREAM_DEPTH           2048U
 #define FLIPRSDR_PROTOCOL_LINE_MAX              256U
@@ -21,10 +21,6 @@ extern "C" {
 #define FLIPRSDR_USB_VCP_CHANNEL                1U
 #define FLIPRSDR_USB_SEND_TIMEOUT_MS            200U
 #define FLIPRSDR_BLE_SEND_TIMEOUT_MS            750U
-#define FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ       (-250)
-#define FLIPRSDR_FREQUENCY_OFFSET_MAX_KHZ       250
-#define FLIPRSDR_FREQUENCY_OFFSET_STEP_KHZ      5
-
 typedef enum {
     FlipRSDRFrequencyPreset300,
     FlipRSDRFrequencyPreset315,
@@ -64,10 +60,9 @@ typedef enum {
 } FlipRSDRTransportState;
 
 typedef struct {
-    uint8_t frequency_preset;
+    uint32_t frequency_hz;
     uint8_t transport_kind;
     uint8_t stream_mode;
-    int16_t frequency_offset_khz;
     bool auto_send_after_burst;
     bool include_rssi;
     bool include_timestamp;

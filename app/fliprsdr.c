@@ -40,6 +40,23 @@ static void fliprsdr_capture_view_action_callback(
     }
 }
 
+static void fliprsdr_frequency_editor_action_callback(
+    FlipRSDRFrequencyEditorAction action,
+    uint32_t frequency_hz,
+    void* context) {
+    FlipRSDRApp* app = context;
+
+    if(action == FlipRSDRFrequencyEditorActionSave) {
+        if(fliprsdr_settings_set_frequency_hz(&app->settings, frequency_hz)) {
+            view_dispatcher_send_custom_event(
+                app->view_dispatcher, FlipRSDRCustomEventFrequencyEditorSave);
+        }
+    } else {
+        view_dispatcher_send_custom_event(
+            app->view_dispatcher, FlipRSDRCustomEventFrequencyEditorCancel);
+    }
+}
+
 void fliprsdr_app_apply_settings(FlipRSDRApp* app, bool reinit_transport) {
     furi_assert(app);
     fliprsdr_settings_validate(&app->settings);
@@ -70,6 +87,7 @@ static FlipRSDRApp* fliprsdr_app_alloc(void) {
     app->variable_item_list = variable_item_list_alloc();
     app->about_widget = widget_alloc();
     app->capture_view = fliprsdr_capture_view_alloc();
+    app->frequency_editor_view = fliprsdr_frequency_editor_view_alloc();
     app->preview_view = fliprsdr_preview_view_alloc();
     app->transport = fliprsdr_transport_alloc();
     app->capture = fliprsdr_capture_alloc(app->transport);
@@ -95,6 +113,10 @@ static FlipRSDRApp* fliprsdr_app_alloc(void) {
         FlipRSDRViewSettings,
         variable_item_list_get_view(app->variable_item_list));
     view_dispatcher_add_view(
+        app->view_dispatcher,
+        FlipRSDRViewFrequencyEditor,
+        fliprsdr_frequency_editor_view_get_view(app->frequency_editor_view));
+    view_dispatcher_add_view(
         app->view_dispatcher, FlipRSDRViewAbout, widget_get_view(app->about_widget));
     view_dispatcher_add_view(
         app->view_dispatcher,
@@ -107,6 +129,8 @@ static FlipRSDRApp* fliprsdr_app_alloc(void) {
 
     fliprsdr_capture_view_set_action_callback(
         app->capture_view, fliprsdr_capture_view_action_callback, app);
+    fliprsdr_frequency_editor_view_set_action_callback(
+        app->frequency_editor_view, fliprsdr_frequency_editor_action_callback, app);
 
     return app;
 }
@@ -118,10 +142,12 @@ static void fliprsdr_app_free(FlipRSDRApp* app) {
     view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewCapture);
     view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewPreview);
     view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewAbout);
+    view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewFrequencyEditor);
     view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewSettings);
     view_dispatcher_remove_view(app->view_dispatcher, FlipRSDRViewSubmenu);
 
     fliprsdr_capture_view_free(app->capture_view);
+    fliprsdr_frequency_editor_view_free(app->frequency_editor_view);
     fliprsdr_preview_view_free(app->preview_view);
     widget_free(app->about_widget);
     variable_item_list_free(app->variable_item_list);

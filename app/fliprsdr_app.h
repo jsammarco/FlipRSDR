@@ -5,6 +5,7 @@
 #include "settings.h"
 #include "transport.h"
 #include "../views/capture_view.h"
+#include "../views/frequency_editor_view.h"
 #include "../views/preview_view.h"
 #include "../scenes/scenes.h"
 
@@ -19,6 +20,7 @@ typedef enum {
     FlipRSDRViewCapture,
     FlipRSDRViewPreview,
     FlipRSDRViewSettings,
+    FlipRSDRViewFrequencyEditor,
     FlipRSDRViewAbout,
 } FlipRSDRView;
 
@@ -31,6 +33,8 @@ typedef enum {
     FlipRSDRCustomEventCaptureClear,
     FlipRSDRCustomEventCaptureSend,
     FlipRSDRCustomEventSettingsDebugSend,
+    FlipRSDRCustomEventFrequencyEditorSave,
+    FlipRSDRCustomEventFrequencyEditorCancel,
 } FlipRSDRCustomEvent;
 
 typedef struct {
@@ -41,6 +45,7 @@ typedef struct {
     VariableItemList* variable_item_list;
     Widget* about_widget;
     FlipRSDRCaptureView* capture_view;
+    FlipRSDRFrequencyEditorView* frequency_editor_view;
     FlipRSDRPreviewView* preview_view;
     FlipRSDRSettings settings;
     bool settings_dirty;

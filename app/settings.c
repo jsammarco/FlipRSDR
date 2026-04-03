@@ -1,11 +1,32 @@
 #include "settings.h"
 
-#include <toolbox/saved_struct.h>
+#include <furi_hal.h>
+#include <lib/toolbox/strint.h>
 #include <stdio.h>
+#include <string.h>
+#include <toolbox/saved_struct.h>
 
 typedef struct {
     FlipRSDRSettings settings;
 } FlipRSDRSettingsStore;
+
+typedef struct {
+    uint8_t frequency_preset;
+    uint8_t transport_kind;
+    uint8_t stream_mode;
+    int16_t frequency_offset_khz;
+    bool auto_send_after_burst;
+    bool include_rssi;
+    bool include_timestamp;
+    uint16_t max_pulse_count;
+    uint16_t capture_timeout_ms;
+    uint16_t gap_threshold_ms;
+    uint16_t preview_bandwidth_khz;
+} FlipRSDRSettingsV3;
+
+typedef struct {
+    FlipRSDRSettingsV3 settings;
+} FlipRSDRSettingsStoreV3;
 
 static const uint32_t fliprsdr_frequency_values[FlipRSDRFrequencyPresetCount] = {
     300000000UL,
@@ -67,17 +88,34 @@ static const char* fliprsdr_preview_bandwidth_labels[] = {
     "400 kHz",
 };
 
-#define FLIPRSDR_FREQUENCY_OFFSET_OPTIONS_COUNT \
-    (((FLIPRSDR_FREQUENCY_OFFSET_MAX_KHZ - FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ) / \
-      FLIPRSDR_FREQUENCY_OFFSET_STEP_KHZ) + \
-     1)
+static bool fliprsdr_settings_load_v3(FlipRSDRSettings* settings) {
+    FlipRSDRSettingsStoreV3 store = {0};
+
+    if(!saved_struct_load(
+           FLIPRSDR_SETTINGS_PATH, &store, sizeof(store), FLIPRSDR_SETTINGS_MAGIC, 3U)) {
+        return false;
+    }
+
+    settings->frequency_hz =
+        fliprsdr_settings_frequency_value(store.settings.frequency_preset) +
+        ((int32_t)store.settings.frequency_offset_khz * 1000L);
+    settings->transport_kind = store.settings.transport_kind;
+    settings->stream_mode = store.settings.stream_mode;
+    settings->auto_send_after_burst = store.settings.auto_send_after_burst;
+    settings->include_rssi = store.settings.include_rssi;
+    settings->include_timestamp = store.settings.include_timestamp;
+    settings->max_pulse_count = store.settings.max_pulse_count;
+    settings->capture_timeout_ms = store.settings.capture_timeout_ms;
+    settings->gap_threshold_ms = store.settings.gap_threshold_ms;
+    settings->preview_bandwidth_khz = store.settings.preview_bandwidth_khz;
+    return true;
+}
 
 void fliprsdr_settings_load_defaults(FlipRSDRSettings* settings) {
     furi_assert(settings);
-    settings->frequency_preset = FlipRSDRFrequencyPreset43392;
+    settings->frequency_hz = 433920000UL;
     settings->transport_kind = FlipRSDRTransportKindUsb;
     settings->stream_mode = FlipRSDRStreamModeBuffered;
-    settings->frequency_offset_khz = 0;
     settings->auto_send_after_burst = false;
     settings->include_rssi = true;
     settings->include_timestamp = true;
@@ -90,24 +128,14 @@ void fliprsdr_settings_load_defaults(FlipRSDRSettings* settings) {
 void fliprsdr_settings_validate(FlipRSDRSettings* settings) {
     furi_assert(settings);
 
-    if(settings->frequency_preset >= FlipRSDRFrequencyPresetCount) {
-        settings->frequency_preset = FlipRSDRFrequencyPreset43392;
+    if(!furi_hal_subghz_is_frequency_valid(settings->frequency_hz)) {
+        settings->frequency_hz = 433920000UL;
     }
     if(settings->transport_kind >= FlipRSDRTransportKindCount) {
         settings->transport_kind = FlipRSDRTransportKindUsb;
     }
     if(settings->stream_mode >= FlipRSDRStreamModeCount) {
         settings->stream_mode = FlipRSDRStreamModeBuffered;
-    }
-    if(settings->frequency_offset_khz < FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ) {
-        settings->frequency_offset_khz = FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ;
-    } else if(settings->frequency_offset_khz > FLIPRSDR_FREQUENCY_OFFSET_MAX_KHZ) {
-        settings->frequency_offset_khz = FLIPRSDR_FREQUENCY_OFFSET_MAX_KHZ;
-    } else {
-        const int16_t step = FLIPRSDR_FREQUENCY_OFFSET_STEP_KHZ;
-        int16_t delta = settings->frequency_offset_khz - FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ;
-        settings->frequency_offset_khz =
-            FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ + ((delta + (step / 2)) / step) * step;
     }
 
     settings->max_pulse_count =
@@ -132,15 +160,30 @@ bool fliprsdr_settings_load(FlipRSDRSettings* settings) {
     furi_assert(settings);
 
     FlipRSDRSettingsStore store = {0};
+    uint8_t version = 0U;
+    size_t payload_size = 0U;
+
     fliprsdr_settings_load_defaults(settings);
 
-    if(saved_struct_load(
+    if(!saved_struct_get_metadata(
+           FLIPRSDR_SETTINGS_PATH, NULL, &version, &payload_size)) {
+        return false;
+    }
+
+    if(version == FLIPRSDR_SETTINGS_VERSION && payload_size == sizeof(store) &&
+       saved_struct_load(
            FLIPRSDR_SETTINGS_PATH,
            &store,
            sizeof(store),
            FLIPRSDR_SETTINGS_MAGIC,
            FLIPRSDR_SETTINGS_VERSION)) {
         *settings = store.settings;
+        fliprsdr_settings_validate(settings);
+        return true;
+    }
+
+    if(version == 3U && payload_size == sizeof(FlipRSDRSettingsStoreV3) &&
+       fliprsdr_settings_load_v3(settings)) {
         fliprsdr_settings_validate(settings);
         return true;
     }
@@ -168,54 +211,86 @@ uint32_t fliprsdr_settings_frequency_value(uint8_t preset_index) {
 
 uint32_t fliprsdr_settings_frequency_hz(const FlipRSDRSettings* settings) {
     furi_assert(settings);
-    const int64_t base_hz = (int64_t)fliprsdr_settings_frequency_value(settings->frequency_preset);
-    const int64_t offset_hz = (int64_t)settings->frequency_offset_khz * 1000LL;
-    const int64_t tuned_hz = base_hz + offset_hz;
+    return settings->frequency_hz;
+}
 
-    if(tuned_hz < 0) {
-        return 0U;
+bool fliprsdr_settings_set_frequency_hz(FlipRSDRSettings* settings, uint32_t frequency_hz) {
+    furi_assert(settings);
+    if(!furi_hal_subghz_is_frequency_valid(frequency_hz)) {
+        return false;
     }
 
-    return (uint32_t)tuned_hz;
+    settings->frequency_hz = frequency_hz;
+    return true;
+}
+
+bool fliprsdr_settings_parse_frequency_text(const char* text, uint32_t* frequency_hz) {
+    furi_assert(text);
+    furi_assert(frequency_hz);
+
+    if(text[0] == '\0') {
+        return false;
+    }
+
+    const char* dot = strchr(text, '.');
+    if(dot) {
+        uint32_t whole_mhz = 0U;
+        if(dot == text) {
+            return false;
+        }
+
+        if(strint_to_uint32(text, (char**)&dot, &whole_mhz, 10) != StrintParseNoError) {
+            return false;
+        }
+
+        uint32_t fractional_hz = 0U;
+        uint32_t scale = 100000U;
+        for(const char* cursor = dot + 1; *cursor; cursor++) {
+            if(*cursor < '0' || *cursor > '9') {
+                return false;
+            }
+
+            if(scale > 0U) {
+                fractional_hz += (uint32_t)(*cursor - '0') * scale;
+                scale /= 10U;
+            }
+        }
+
+        const uint64_t total_hz = ((uint64_t)whole_mhz * 1000000ULL) + fractional_hz;
+        if(total_hz > UINT32_MAX) {
+            return false;
+        }
+
+        *frequency_hz = (uint32_t)total_hz;
+        return true;
+    }
+
+    uint32_t value = 0U;
+    if(strint_to_uint32(text, NULL, &value, 10) != StrintParseNoError) {
+        return false;
+    }
+
+    if(value < 1000U) {
+        value *= 1000000U;
+    }
+
+    *frequency_hz = value;
+    return true;
+}
+
+void fliprsdr_settings_frequency_text(uint32_t frequency_hz, char* buffer, size_t size) {
+    furi_assert(buffer);
+    snprintf(
+        buffer,
+        size,
+        "%lu.%03luM",
+        (unsigned long)(frequency_hz / 1000000UL),
+        (unsigned long)((frequency_hz % 1000000UL) / 1000UL));
 }
 
 const char* fliprsdr_settings_frequency_label(uint8_t preset_index) {
     if(preset_index >= FlipRSDRFrequencyPresetCount) return "?";
     return fliprsdr_frequency_labels[preset_index];
-}
-
-uint8_t fliprsdr_settings_frequency_offset_options_count(void) {
-    return FLIPRSDR_FREQUENCY_OFFSET_OPTIONS_COUNT;
-}
-
-int16_t fliprsdr_settings_frequency_offset_value(uint8_t index) {
-    if(index >= FLIPRSDR_FREQUENCY_OFFSET_OPTIONS_COUNT) {
-        index = fliprsdr_settings_frequency_offset_index(0);
-    }
-
-    return (int16_t)(FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ +
-                     ((int16_t)index * FLIPRSDR_FREQUENCY_OFFSET_STEP_KHZ));
-}
-
-uint8_t fliprsdr_settings_frequency_offset_index(int16_t value) {
-    if(value <= FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ) {
-        return 0U;
-    }
-    if(value >= FLIPRSDR_FREQUENCY_OFFSET_MAX_KHZ) {
-        return FLIPRSDR_FREQUENCY_OFFSET_OPTIONS_COUNT - 1U;
-    }
-
-    return (uint8_t)((value - FLIPRSDR_FREQUENCY_OFFSET_MIN_KHZ) /
-                     FLIPRSDR_FREQUENCY_OFFSET_STEP_KHZ);
-}
-
-void fliprsdr_settings_frequency_offset_label(int16_t value, char* buffer, size_t size) {
-    furi_assert(buffer);
-    if(value == 0) {
-        snprintf(buffer, size, "0 kHz");
-    } else {
-        snprintf(buffer, size, "%+d kHz", value);
-    }
 }
 
 const char* fliprsdr_settings_transport_label(uint8_t transport_index) {
