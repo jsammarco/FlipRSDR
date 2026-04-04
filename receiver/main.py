@@ -1041,6 +1041,9 @@ class ReceiverMainWindow(QMainWindow):
         else:
             self.waterfall_window_combo.setCurrentText(f"{DEFAULT_WATERFALL_WINDOW_S}s")
 
+        saved_view = str(self._settings.value("view/mode", "Waterfall", type=str)).strip()
+        self.view_combo.setCurrentText(saved_view if saved_view in {"Waveform", "Waterfall"} else "Waterfall")
+
         saved_recording_path = str(self._settings.value("recording/path", "", type=str)).strip()
         if saved_recording_path:
             self._recording_path = Path(saved_recording_path)
@@ -1061,6 +1064,7 @@ class ReceiverMainWindow(QMainWindow):
         self._settings.setValue("serial/last_port", self.port_combo.currentText().strip())
         self._settings.setValue("serial/baud_rate", self.baud_combo.currentText().strip())
         self._settings.setValue("serial/protocol", self.protocol_combo.currentText().strip())
+        self._settings.setValue("view/mode", self.view_combo.currentText())
         self._settings.setValue("waterfall/window_s", self._waterfall_window_s)
         if self._recording_path is not None:
             self._settings.setValue("recording/path", str(self._recording_path))
