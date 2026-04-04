@@ -90,7 +90,6 @@ fun AndroidReceiverScreen(viewModel: ReceiverViewModel) {
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                StatusBanner(state)
                 when (currentTab) {
                     ReceiverTab.CONNECT -> ConnectPage(
                         state = state,
@@ -126,30 +125,6 @@ fun AndroidReceiverScreen(viewModel: ReceiverViewModel) {
 }
 
 @Composable
-private fun StatusBanner(state: ReceiverUiState) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text("Android Receiver", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                state.connectionStatus,
-                color = if (state.connected) Color(0xFF8CF0C3) else Color(0xFFFFAE77),
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            Text(
-                "USB and BLE serial receiver for FlipRSDR with remote commands, waveform/waterfall monitoring, recording, and audio playback.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-    }
-}
-
-@Composable
 private fun ConnectPage(
     state: ReceiverUiState,
     onTransportMode: (TransportMode) -> Unit,
@@ -163,6 +138,18 @@ private fun ConnectPage(
         modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Connect", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    state.connectionStatus,
+                    color = if (state.connected) Color(0xFF8CF0C3) else Color(0xFFFFAE77),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+            }
+        }
         Card {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text("Transport", style = MaterialTheme.typography.titleMedium)
@@ -241,6 +228,14 @@ private fun ControlPage(
         modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Control", style = MaterialTheme.typography.headlineSmall)
+                Text(state.commandStatus, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         Card {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Remote Commands", style = MaterialTheme.typography.titleMedium)
@@ -306,6 +301,17 @@ private fun MonitorPage(
         modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Monitor", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    state.currentBurst?.let { "Burst ${it.burst} • ${it.timingCount} timings" } ?: "Waiting for receiver traffic",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
         Card {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("Monitor", style = MaterialTheme.typography.titleMedium)
@@ -357,6 +363,14 @@ private fun LogsPage(logs: List<String>) {
         modifier = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        ) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Logs", style = MaterialTheme.typography.headlineSmall)
+                Text("Live serial and protocol events", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         LogCard(logs)
     }
 }

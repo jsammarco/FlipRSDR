@@ -5,6 +5,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.os.Build
 import com.hoho.android.usbserial.driver.UsbSerialDriver
@@ -113,15 +115,17 @@ class UsbSerialTransport(
         return prober.findAllDrivers(usbManager)
             .sortedBy { it.device.deviceName }
             .flatMap { driver ->
-                driver.ports.mapIndexed { index, _ ->
+                val chosenIndices = when {
+                    driver.ports.size >= 2 -> listOf(1)
+                    driver.ports.isNotEmpty() -> listOf(0)
+                    else -> emptyList()
+                }
+                chosenIndices.map { index ->
                     val device = driver.device
-                    val multiplePorts = driver.ports.size > 1
                     val title = buildString {
                         append(device.productName ?: "USB ${device.deviceId}")
-                        if (multiplePorts) {
-                            append(" Port ")
-                            append(index + 1)
-                        }
+                        append(" Port ")
+                        append(index + 1)
                     }
                     val subtitle = listOfNotNull(
                         device.manufacturerName,
@@ -141,7 +145,7 @@ class UsbSerialTransport(
             }
     }
 
-    private suspend fun requestPermission(device: android.hardware.usb.UsbDevice): Boolean {
+    private suspend fun requestPermission(device: UsbDevice): Boolean {
         val action = "${appContext.packageName}.USB_PERMISSION"
         val intent = PendingIntent.getBroadcast(
             appContext,
@@ -179,9 +183,9 @@ class UsbSerialTransport(
     }
 
     private inner class UsbSession(
-        val connection: android.hardware.usb.UsbDeviceConnection,
+        val connection: UsbDeviceConnection,
         val port: UsbSerialPort,
-        val portLabel: String,
+        private val portLabel: String,
     ) : SerialInputOutputManager.Listener {
         private val ioManager = SerialInputOutputManager(port, this)
 
