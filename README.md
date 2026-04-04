@@ -187,6 +187,9 @@ Skip build after sync:
 
 The Windows desktop companion app lives under `receiver/` and is called `FlipRSDR Receiver`.
 
+- Project path: `receiver\`
+- Build script: `.\build_receiver.ps1`
+- Output: `build\FlipRSDR Receiver.exe`
 - Live serial ingest from the Flipper CDC stream
 - Supports both `fliprsdr` binary packets and legacy JSON
 - Waveform view for the current pulse train
@@ -204,60 +207,34 @@ The receiver can drive the Flipper remotely after connection. The current UI exp
 
 These commands are written back over the open serial connection and apply immediately on the device. If capture is already running, a remote frequency change stops capture, applies the new frequency, and restarts capture automatically.
 
-Build the Windows executable with:
-
-```powershell
-.\build_receiver.ps1
-```
-
-The build script writes the final executable to:
-
-```text
-build\FlipRSDR Receiver.exe
-```
-
 ## Android receiver
 
 An Android companion app now lives under `android_receiver/` and is called `Android Receiver`.
 
-- USB serial host support for Flipper CDC serial
+- Project path: `android_receiver\`
+- Build script: `.\build_android_receiver.ps1`
+- Output: `build\Android Receiver-debug.apk`
+- No Android screenshots yet
+- USB serial host support for the working Flipper CDC user port
 - BLE serial support with Nordic UART fallback plus generic write/notify discovery
 - `fliprsdr` binary and JSON protocol parsing
+- Bottom-navigation UI with dedicated Connect, Control, Monitor, and Logs pages
 - Live waveform and waterfall views
 - Remote commands for `start_scan`, `stop_scan`, `set_frequency`, and `set_rssi_threshold`
 - Optional recording to `.fliprsdr` or `.jsonl`
 - Optional audio playback for completed bursts
 
-Build it from the repo root with:
-
-```powershell
-.\build_android_receiver.ps1
-```
-
-The build script writes the final APK to:
-
-```text
-build\Android Receiver-debug.apk
-```
+The current Android USB flow is tuned around the Flipper dual-CDC layout and only exposes the proven working serial path on Android when multiple USB serial ports are present.
 
 ## PC analyzer
 
 The offline analysis companion app lives under `analyzer/` and is called `FlipRSDR Analyzer`.
 
+- Project path: `analyzer\`
+- Build script: `.\build_analyzer.ps1`
+- Output: `build\FlipRSDR Analyzer.exe`
 - Loads saved `.fliprsdr` recordings from the receiver, plus legacy JSONL
 - Replays bursts over recording time with optional audio playback
 - Shows waveform and a full recording waterfall view
 - Highlights repeated timing signatures and likely frame-like bursts
 - Attempts a lightweight short/long symbol decode for bursts that resemble simple PWM-style framing
-
-Build the Windows executable with:
-
-```powershell
-.\build_analyzer.ps1
-```
-
-The build script writes the final executable to:
-
-```text
-build\FlipRSDR Analyzer.exe
-```
