@@ -1,6 +1,6 @@
 # FlipRSDR
 
-FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pulse/gap timings and streams them to a PC over USB CDC or BLE serial. It is intentionally focused on pulse timing fidelity rather than protocol decoding.
+FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pulse/gap timings and streams them to a PC over USB CDC or BLE serial. It is intentionally focused on pulse timing fidelity rather than protocol decoding, and the transport is now bidirectional so a desktop client can also remote-control capture settings.
 
 ## What it does
 
@@ -9,6 +9,7 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
 - Preserves the full timing burst locally in buffered modes, including truncation and overflow flags
 - Streams the compact `fliprsdr` binary protocol by default, with JSON kept as a debug option
 - Supports USB CDC on dual-CDC channel `1` and BLE serial
+- Accepts simple remote-control commands over the same USB or BLE link for scan start/stop, frequency changes, and RSSI threshold updates
 
 ## Screenshots
 
@@ -81,16 +82,31 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
   - Debug send action
 - `About`
 
-## Streaming format
+## Protocol and transport
 
-The default serial format is the custom `fliprsdr` binary protocol defined in `fliprsdr_binary_protocol_spec.md`. It uses:
+The default serial format is the custom `fliprsdr` binary protocol defined in `fliprsdr_binary_protocol_spec.md`. The current implementation uses:
 
 - COBS framing with `0x00` delimiters
 - CRC-16/XMODEM integrity checks
 - little-endian metadata fields
 - unsigned varints for timing arrays
+- packet types `BURST_START`, `TIMING_CHUNK`, `BURST_END`, and `BURST_CAPTURE`
+- optional timestamp fields encoded in microseconds
+- optional RSSI fields encoded as signed centi-dBm (`dBm * 100`)
+
+Live streaming emits `BURST_START`, one or more `TIMING_CHUNK` packets, and `BURST_END`. Buffered sends prefer a single `BURST_CAPTURE` packet when the burst fits, and automatically fall back to the segmented live-style sequence for truncated or oversized captures.
 
 JSON remains available as a compatibility/debug option. In either format, `first_level` is preserved so the PC side can reconstruct the exact pulse/gap ordering even if the first received interval is a gap.
+
+The same transport is also used for inbound remote commands from the PC. Commands are newline-delimited ASCII and are currently:
+
+- `start_scan`
+- `stop_scan`
+- `set_frequency <value>`
+- `set_rssi_threshold off`
+- `set_rssi_threshold <-dBm>`
+
+`set_frequency` accepts plain Hz values such as `433920000`, integer MHz values such as `433`, or decimal MHz text such as `433.920`. Remote commands work over both USB CDC and BLE serial.
 
 ## File structure
 
@@ -107,7 +123,7 @@ JSON remains available as a compatibility/debug option. In either format, `first
 - `app/capture.c` / `app/capture.h`
   - Raw async Sub-GHz receive worker and burst assembly
 - `app/transport.c` / `app/transport.h`
-  - Shared transport thread and backend selection
+  - Shared bidirectional transport thread, backend selection, and command callback dispatch
 - `app/transport_usb.c`
   - USB CDC transport backend
 - `app/transport_ble.c`
@@ -122,6 +138,8 @@ JSON remains available as a compatibility/debug option. In either format, `first
   - Flipper manifest
 - `build.ps1`
   - Sync-and-build helper for a local firmware checkout
+- `fliprsdr_protocol.py`
+  - Shared Python encoder/decoder used by the receiver and analyzer for `.fliprsdr` recordings and live packet parsing
 
 ## Firmware API assumptions
 
@@ -135,6 +153,7 @@ JSON remains available as a compatibility/debug option. In either format, `first
   - `bt_profile_start(..., ble_profile_serial, NULL)`
   - `ble_profile_serial_set_event_callback(...)`
   - `ble_profile_serial_tx(...)`
+- Remote-control RX uses newline-delimited line input from either transport backend
 
 ## Notes and TODOs
 
@@ -169,11 +188,21 @@ Skip build after sync:
 The Windows desktop companion app lives under `receiver/` and is called `FlipRSDR Receiver`.
 
 - Live serial ingest from the Flipper CDC stream
+- Supports both `fliprsdr` binary packets and legacy JSON
 - Waveform view for the current pulse train
 - Waterfall view using log-duration bins with SDR-style coloring
 - Optional recording of completed bursts to `.fliprsdr` binary files or JSONL
 - Optional audible playback of completed bursts
 - Automatic port refresh while disconnected, plus last-port recall on restart
+- Remote control panel for `start_scan`, `stop_scan`, `set_frequency`, and `set_rssi_threshold`
+
+The receiver can drive the Flipper remotely after connection. The current UI exposes:
+
+- Start/stop scan buttons
+- Frequency presets or manual entry
+- RSSI threshold presets or `Off`
+
+These commands are written back over the open serial connection and apply immediately on the device. If capture is already running, a remote frequency change stops capture, applies the new frequency, and restarts capture automatically.
 
 Build the Windows executable with:
 
