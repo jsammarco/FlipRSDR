@@ -5,40 +5,26 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.hardware.usb.UsbConstants
-import android.hardware.usb.UsbDevice
-import android.hardware.usb.UsbDeviceConnection
-import android.hardware.usb.UsbEndpoint
-import android.hardware.usb.UsbInterface
 import android.hardware.usb.UsbManager
 import android.os.Build
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
+import com.hoho.android.usbserial.driver.UsbSerialDriver
+import com.hoho.android.usbserial.driver.UsbSerialPort
+import com.hoho.android.usbserial.driver.UsbSerialProber
+import com.hoho.android.usbserial.util.SerialInputOutputManager
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
 import kotlin.coroutines.resume
-import kotlin.math.max
-import kotlin.math.min
-
-private const val USB_RECIP_INTERFACE = 0x01
 
 class UsbSerialTransport(
     private val appContext: Context,
 ) : ReceiverTransport {
     private val usbManager = appContext.getSystemService(Context.USB_SERVICE) as UsbManager
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val eventFlow = MutableSharedFlow<TransportEvent>(extraBufferCapacity = 64)
+    private val eventFlow = MutableSharedFlow<TransportEvent>(extraBufferCapacity = 128)
     private val stateFlow = MutableStateFlow(TransportSnapshot(mode = TransportMode.USB))
     private var activeSession: UsbSession? = null
 
@@ -46,60 +32,58 @@ class UsbSerialTransport(
     override val events: SharedFlow<TransportEvent> = eventFlow.asSharedFlow()
 
     override suspend fun refreshDevices() {
-        val devices = usbManager.deviceList.values
-            .sortedBy { it.deviceName }
-            .filter { hasDataEndpoints(it) }
-            .map { device ->
-                TransportDevice(
-                    id = device.deviceId.toString(),
-                    title = device.productName ?: "USB ${device.deviceId}",
-                    subtitle = listOfNotNull(
-                        device.manufacturerName,
-                        "VID ${device.vendorId}:PID ${device.productId}",
-                    ).joinToString(" | "),
-                )
-            }
+        val devices = enumeratePorts()
         stateFlow.value = stateFlow.value.copy(
-            devices = devices,
-            statusText = if (stateFlow.value.connected) stateFlow.value.statusText else "Found ${devices.size} USB serial device(s)",
+            devices = devices.map { it.device },
+            statusText = if (stateFlow.value.connected) stateFlow.value.statusText else "Found ${devices.size} USB serial port(s)",
         )
     }
 
     override suspend fun connect(deviceId: String, baudRate: Int): Boolean {
         disconnect()
-        val device = usbManager.deviceList.values.firstOrNull { it.deviceId.toString() == deviceId }
+        val target = enumeratePorts().firstOrNull { it.device.id == deviceId }
             ?: run {
-                eventFlow.emit(TransportEvent.Warning(TransportMode.USB, "USB device not found"))
+                eventFlow.emit(TransportEvent.Warning(TransportMode.USB, "USB serial port not found"))
                 return false
             }
 
-        if (!usbManager.hasPermission(device) && !requestPermission(device)) {
+        if (!usbManager.hasPermission(target.driver.device) && !requestPermission(target.driver.device)) {
             eventFlow.emit(TransportEvent.Warning(TransportMode.USB, "USB permission denied"))
             return false
         }
 
-        val connection = usbManager.openDevice(device)
+        val connection = usbManager.openDevice(target.driver.device)
         if (connection == null) {
             eventFlow.emit(TransportEvent.Warning(TransportMode.USB, "Unable to open USB device"))
             return false
         }
 
-        val session = UsbSession(device, connection, baudRate)
-        if (!session.open()) {
-            connection.close()
-            eventFlow.emit(TransportEvent.Warning(TransportMode.USB, "Unable to configure USB CDC serial"))
-            return false
-        }
+        return try {
+            val port = target.driver.ports[target.portIndex]
+            port.open(connection)
+            port.setParameters(baudRate, 8, UsbSerialPort.STOPBITS_1, UsbSerialPort.PARITY_NONE)
+            runCatching { port.dtr = true }
+            runCatching { port.rts = true }
 
-        activeSession = session
-        stateFlow.value = stateFlow.value.copy(
-            connectedDeviceId = deviceId,
-            connected = true,
-            statusText = "Connected to ${device.productName ?: device.deviceName}",
-        )
-        eventFlow.emit(TransportEvent.Status(TransportMode.USB, stateFlow.value.statusText))
-        session.startReader(scope, eventFlow)
-        return true
+            val session = UsbSession(
+                connection = connection,
+                port = port,
+                portLabel = target.device.title,
+            )
+            session.start()
+            activeSession = session
+            stateFlow.value = stateFlow.value.copy(
+                connectedDeviceId = target.device.id,
+                connected = true,
+                statusText = "Connected to ${target.device.title}",
+            )
+            eventFlow.emit(TransportEvent.Status(TransportMode.USB, stateFlow.value.statusText))
+            true
+        } catch (error: Exception) {
+            runCatching { connection.close() }
+            eventFlow.emit(TransportEvent.Warning(TransportMode.USB, "USB open failed: ${error.message}"))
+            false
+        }
     }
 
     override suspend fun disconnect() {
@@ -113,9 +97,51 @@ class UsbSerialTransport(
         eventFlow.emit(TransportEvent.Status(TransportMode.USB, "Disconnected"))
     }
 
-    override suspend fun send(data: ByteArray): Boolean = activeSession?.write(data) ?: false
+    override suspend fun send(data: ByteArray): Boolean {
+        val session = activeSession ?: return false
+        return try {
+            session.port.write(data, WRITE_TIMEOUT_MS)
+            true
+        } catch (error: Exception) {
+            eventFlow.emit(TransportEvent.Warning(TransportMode.USB, "USB write failed: ${error.message}"))
+            false
+        }
+    }
 
-    private suspend fun requestPermission(device: UsbDevice): Boolean {
+    private fun enumeratePorts(): List<DetectedUsbPort> {
+        val prober = UsbSerialProber.getDefaultProber()
+        return prober.findAllDrivers(usbManager)
+            .sortedBy { it.device.deviceName }
+            .flatMap { driver ->
+                driver.ports.mapIndexed { index, _ ->
+                    val device = driver.device
+                    val multiplePorts = driver.ports.size > 1
+                    val title = buildString {
+                        append(device.productName ?: "USB ${device.deviceId}")
+                        if (multiplePorts) {
+                            append(" Port ")
+                            append(index + 1)
+                        }
+                    }
+                    val subtitle = listOfNotNull(
+                        device.manufacturerName,
+                        "VID ${device.vendorId}:PID ${device.productId}",
+                        "Driver ${driver.javaClass.simpleName}",
+                    ).joinToString(" | ")
+                    DetectedUsbPort(
+                        driver = driver,
+                        portIndex = index,
+                        device = TransportDevice(
+                            id = "${device.deviceId}:$index",
+                            title = title,
+                            subtitle = subtitle,
+                        ),
+                    )
+                }
+            }
+    }
+
+    private suspend fun requestPermission(device: android.hardware.usb.UsbDevice): Boolean {
         val action = "${appContext.packageName}.USB_PERMISSION"
         val intent = PendingIntent.getBroadcast(
             appContext,
@@ -152,147 +178,48 @@ class UsbSerialTransport(
         }
     }
 
-    private fun hasDataEndpoints(device: UsbDevice): Boolean {
-        repeat(device.interfaceCount) { interfaceIndex ->
-            val iface = device.getInterface(interfaceIndex)
-            var hasIn = false
-            var hasOut = false
-            repeat(iface.endpointCount) { endpointIndex ->
-                val endpoint = iface.getEndpoint(endpointIndex)
-                if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
-                    if (endpoint.direction == UsbConstants.USB_DIR_IN) hasIn = true
-                    if (endpoint.direction == UsbConstants.USB_DIR_OUT) hasOut = true
-                }
-            }
-            if (hasIn && hasOut) {
-                return true
-            }
-        }
-        return false
-    }
-
     private inner class UsbSession(
-        private val device: UsbDevice,
-        private val connection: UsbDeviceConnection,
-        private val baudRate: Int,
-    ) {
-        private var controlInterface: UsbInterface? = null
-        private var dataInterface: UsbInterface? = null
-        private var inputEndpoint: UsbEndpoint? = null
-        private var outputEndpoint: UsbEndpoint? = null
-        private var readerJob: Job? = null
-        @Volatile
-        private var open = false
+        val connection: android.hardware.usb.UsbDeviceConnection,
+        val port: UsbSerialPort,
+        val portLabel: String,
+    ) : SerialInputOutputManager.Listener {
+        private val ioManager = SerialInputOutputManager(port, this)
 
-        fun open(): Boolean {
-            controlInterface = findControlInterface(device)
-            dataInterface = findDataInterface(device)
-            val data = dataInterface ?: return false
-            inputEndpoint = findEndpoint(data, UsbConstants.USB_DIR_IN)
-            outputEndpoint = findEndpoint(data, UsbConstants.USB_DIR_OUT)
-            if (inputEndpoint == null || outputEndpoint == null) {
-                return false
-            }
-
-            controlInterface?.let {
-                if (!connection.claimInterface(it, true)) return false
-            }
-            if (!connection.claimInterface(data, true)) return false
-
-            val lineCoding = ByteBuffer.allocate(7)
-                .order(ByteOrder.LITTLE_ENDIAN)
-                .putInt(baudRate)
-                .put(0)
-                .put(0)
-                .put(8)
-                .array()
-
-            val controlId = controlInterface?.id ?: 0
-            connection.controlTransfer(
-                UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_CLASS or USB_RECIP_INTERFACE,
-                0x20,
-                0,
-                controlId,
-                lineCoding,
-                lineCoding.size,
-                1_000,
-            )
-            connection.controlTransfer(
-                UsbConstants.USB_DIR_OUT or UsbConstants.USB_TYPE_CLASS or USB_RECIP_INTERFACE,
-                0x22,
-                0x03,
-                controlId,
-                null,
-                0,
-                1_000,
-            )
-            open = true
-            return true
-        }
-
-        fun startReader(scope: CoroutineScope, flow: MutableSharedFlow<TransportEvent>) {
-            val endpoint = inputEndpoint ?: return
-            readerJob = scope.launch {
-                val buffer = ByteArray(max(64, endpoint.maxPacketSize))
-                while (open) {
-                    val count = connection.bulkTransfer(endpoint, buffer, buffer.size, 250)
-                    if (count > 0) {
-                        flow.emit(TransportEvent.Bytes(TransportMode.USB, buffer.copyOf(count)))
-                    } else if (count < 0 && open) {
-                        flow.emit(TransportEvent.Warning(TransportMode.USB, "USB read stalled"))
-                        delay(50)
-                    }
-                }
-            }
-        }
-
-        fun write(data: ByteArray): Boolean {
-            val endpoint = outputEndpoint ?: return false
-            var offset = 0
-            while (offset < data.size && open) {
-                val chunkSize = min(data.size - offset, max(16, endpoint.maxPacketSize))
-                val chunk = data.copyOfRange(offset, offset + chunkSize)
-                val count = connection.bulkTransfer(endpoint, chunk, chunk.size, 1_000)
-                if (count <= 0) {
-                    return false
-                }
-                offset += count
-            }
-            return offset == data.size
+        fun start() {
+            ioManager.start()
         }
 
         fun close() {
-            open = false
-            readerJob?.cancel()
-            dataInterface?.let { runCatching { connection.releaseInterface(it) } }
-            controlInterface?.let { runCatching { connection.releaseInterface(it) } }
-            connection.close()
+            ioManager.stop()
+            runCatching { port.dtr = false }
+            runCatching { port.rts = false }
+            runCatching { port.close() }
+            runCatching { connection.close() }
+        }
+
+        override fun onNewData(data: ByteArray) {
+            eventFlow.tryEmit(TransportEvent.Bytes(TransportMode.USB, data))
+        }
+
+        override fun onRunError(error: Exception) {
+            if (activeSession === this) {
+                eventFlow.tryEmit(
+                    TransportEvent.Warning(
+                        TransportMode.USB,
+                        "USB serial error on $portLabel: ${error.message ?: error.javaClass.simpleName}",
+                    ),
+                )
+            }
         }
     }
 
-    private fun findControlInterface(device: UsbDevice): UsbInterface? =
-        (0 until device.interfaceCount)
-            .map { device.getInterface(it) }
-            .firstOrNull { it.interfaceClass == UsbConstants.USB_CLASS_COMM }
+    private data class DetectedUsbPort(
+        val driver: UsbSerialDriver,
+        val portIndex: Int,
+        val device: TransportDevice,
+    )
 
-    private fun findDataInterface(device: UsbDevice): UsbInterface? =
-        (0 until device.interfaceCount)
-            .map { device.getInterface(it) }
-            .firstOrNull { iface ->
-                var hasIn = false
-                var hasOut = false
-                repeat(iface.endpointCount) { endpointIndex ->
-                    val endpoint = iface.getEndpoint(endpointIndex)
-                    if (endpoint.type == UsbConstants.USB_ENDPOINT_XFER_BULK) {
-                        if (endpoint.direction == UsbConstants.USB_DIR_IN) hasIn = true
-                        if (endpoint.direction == UsbConstants.USB_DIR_OUT) hasOut = true
-                    }
-                }
-                hasIn && hasOut
-            }
-
-    private fun findEndpoint(iface: UsbInterface, direction: Int): UsbEndpoint? =
-        (0 until iface.endpointCount)
-            .map { iface.getEndpoint(it) }
-            .firstOrNull { it.type == UsbConstants.USB_ENDPOINT_XFER_BULK && it.direction == direction }
+    companion object {
+        private const val WRITE_TIMEOUT_MS = 1_000
+    }
 }

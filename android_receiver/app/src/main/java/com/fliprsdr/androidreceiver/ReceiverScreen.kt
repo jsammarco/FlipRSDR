@@ -22,6 +22,8 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -32,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -48,76 +51,106 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.max
 
+private enum class ReceiverTab(
+    val title: String,
+    val glyph: String,
+) {
+    CONNECT("Connect", "USB"),
+    CONTROL("Control", "CMD"),
+    MONITOR("Monitor", "SIG"),
+    LOGS("Logs", "LOG"),
+}
+
 @Composable
 fun AndroidReceiverScreen(viewModel: ReceiverViewModel) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    var currentTab by rememberSaveable { mutableStateOf(ReceiverTab.CONNECT) }
 
-    MaterialTheme(
-        colorScheme = androidReceiverColors(),
-    ) {
-        Scaffold { padding ->
+    MaterialTheme(colorScheme = androidReceiverColors()) {
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            bottomBar = {
+                NavigationBar(containerColor = Color(0xFF0B1620)) {
+                    ReceiverTab.entries.forEach { tab ->
+                        NavigationBarItem(
+                            selected = currentTab == tab,
+                            onClick = { currentTab = tab },
+                            icon = { Text(tab.glyph, fontSize = 11.sp) },
+                            label = { Text(tab.title) },
+                        )
+                    }
+                }
+            },
+        ) { padding ->
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.background)
-                    .verticalScroll(rememberScrollState())
                     .padding(padding)
-                    .padding(12.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                HeaderCard()
-                TransportCard(
-                    state = state,
-                    onTransportMode = viewModel::setTransportMode,
-                    onRefresh = viewModel::refreshDevices,
-                    onSelectDevice = viewModel::setSelectedDevice,
-                    onBaudRateChanged = viewModel::setBaudRate,
-                    onProtocolChanged = viewModel::setProtocolFormat,
-                    onToggleConnection = viewModel::toggleConnection,
-                )
-                RemoteCard(
-                    state = state,
-                    onStartScan = viewModel::sendStartScan,
-                    onStopScan = viewModel::sendStopScan,
-                    onFrequencyChanged = viewModel::setRemoteFrequency,
-                    onSendFrequency = viewModel::sendFrequency,
-                    onRssiChanged = viewModel::setRemoteRssiThreshold,
-                    onSendRssi = viewModel::sendRssiThreshold,
-                )
-                ViewOptionsCard(
-                    state = state,
-                    onViewMode = viewModel::setViewMode,
-                    onWindowChanged = viewModel::setWaterfallWindowSeconds,
-                    onAudioChanged = viewModel::setAudioEnabled,
-                    onToggleRecording = viewModel::toggleRecording,
-                    onClearWaterfall = viewModel::clearWaterfall,
-                )
-                StatsCard(state)
-                PlotCard(state)
-                LogCard(state.logs)
+                StatusBanner(state)
+                when (currentTab) {
+                    ReceiverTab.CONNECT -> ConnectPage(
+                        state = state,
+                        onTransportMode = viewModel::setTransportMode,
+                        onRefresh = viewModel::refreshDevices,
+                        onSelectDevice = viewModel::setSelectedDevice,
+                        onBaudRateChanged = viewModel::setBaudRate,
+                        onProtocolChanged = viewModel::setProtocolFormat,
+                        onToggleConnection = viewModel::toggleConnection,
+                    )
+                    ReceiverTab.CONTROL -> ControlPage(
+                        state = state,
+                        onStartScan = viewModel::sendStartScan,
+                        onStopScan = viewModel::sendStopScan,
+                        onFrequencyChanged = viewModel::setRemoteFrequency,
+                        onSendFrequency = viewModel::sendFrequency,
+                        onRssiChanged = viewModel::setRemoteRssiThreshold,
+                        onSendRssi = viewModel::sendRssiThreshold,
+                    )
+                    ReceiverTab.MONITOR -> MonitorPage(
+                        state = state,
+                        onViewMode = viewModel::setViewMode,
+                        onWindowChanged = viewModel::setWaterfallWindowSeconds,
+                        onAudioChanged = viewModel::setAudioEnabled,
+                        onToggleRecording = viewModel::toggleRecording,
+                        onClearWaterfall = viewModel::clearWaterfall,
+                    )
+                    ReceiverTab.LOGS -> LogsPage(state.logs)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun HeaderCard() {
+private fun StatusBanner(state: ReceiverUiState) {
     Card(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
     ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             Text("Android Receiver", style = MaterialTheme.typography.headlineSmall)
             Text(
-                "USB serial and BLE serial companion for FlipRSDR with live waveform, waterfall, commands, recording, and audio playback.",
-                style = MaterialTheme.typography.bodyMedium,
+                state.connectionStatus,
+                color = if (state.connected) Color(0xFF8CF0C3) else Color(0xFFFFAE77),
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            Text(
+                "USB and BLE serial receiver for FlipRSDR with remote commands, waveform/waterfall monitoring, recording, and audio playback.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
             )
         }
     }
 }
 
 @Composable
-private fun TransportCard(
+private fun ConnectPage(
     state: ReceiverUiState,
     onTransportMode: (TransportMode) -> Unit,
     onRefresh: () -> Unit,
@@ -126,62 +159,76 @@ private fun TransportCard(
     onProtocolChanged: (ProtocolFormat) -> Unit,
     onToggleConnection: () -> Unit,
 ) {
-    Card {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Connection", style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ToggleChoice(
-                    label = "USB",
-                    active = state.transportMode == TransportMode.USB,
-                    onClick = { onTransportMode(TransportMode.USB) },
-                )
-                ToggleChoice(
-                    label = "BLE",
-                    active = state.transportMode == TransportMode.BLE,
-                    onClick = { onTransportMode(TransportMode.BLE) },
-                )
-                Spacer(Modifier.weight(1f))
-                OutlinedButton(onClick = onRefresh) {
-                    Text(if (state.transportMode == TransportMode.USB) "Refresh" else "Scan")
+    Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Card {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text("Transport", style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ToggleChoice("USB", state.transportMode == TransportMode.USB) { onTransportMode(TransportMode.USB) }
+                    ToggleChoice("BLE", state.transportMode == TransportMode.BLE) { onTransportMode(TransportMode.BLE) }
                 }
-                Button(onClick = onToggleConnection) {
-                    Text(if (state.connected) "Disconnect" else "Connect")
+                DropdownField(
+                    label = if (state.transportMode == TransportMode.USB) "USB Device" else "BLE Device",
+                    options = state.devices,
+                    selectedId = state.selectedDeviceId,
+                    onSelect = onSelectDevice,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    SelectionField(
+                        modifier = Modifier.weight(1f),
+                        label = "Baud",
+                        value = state.baudRate.toString(),
+                        options = listOf("9600", "57600", "115200", "230400", "460800", "921600"),
+                        onSelect = onBaudRateChanged,
+                    )
+                    SelectionField(
+                        modifier = Modifier.weight(1f),
+                        label = "Protocol",
+                        value = state.protocolFormat.wireName,
+                        options = ProtocolFormat.entries.map { it.wireName },
+                        onSelect = { selected ->
+                            ProtocolFormat.entries.firstOrNull { it.wireName == selected }?.let(onProtocolChanged)
+                        },
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedButton(
+                        onClick = onRefresh,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(if (state.transportMode == TransportMode.USB) "Refresh Devices" else "Scan Devices")
+                    }
+                    Button(
+                        onClick = onToggleConnection,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(if (state.connected) "Disconnect" else "Connect")
+                    }
                 }
             }
-            DropdownField(
-                label = if (state.transportMode == TransportMode.USB) "USB Device" else "BLE Device",
-                options = state.devices,
-                selectedId = state.selectedDeviceId,
-                onSelect = onSelectDevice,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SelectionField(
-                    modifier = Modifier.weight(1f),
-                    label = "Baud",
-                    value = state.baudRate.toString(),
-                    options = listOf("9600", "57600", "115200", "230400", "460800", "921600"),
-                    onSelect = onBaudRateChanged,
-                )
-                SelectionField(
-                    modifier = Modifier.weight(1f),
-                    label = "Protocol",
-                    value = state.protocolFormat.wireName,
-                    options = ProtocolFormat.entries.map { it.wireName },
-                    onSelect = { selected ->
-                        ProtocolFormat.entries.firstOrNull { it.wireName == selected }?.let(onProtocolChanged)
+        }
+
+        Card {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Tips", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    if (state.transportMode == TransportMode.USB) {
+                        "FlipRSDR uses the Flipper's user CDC channel. The app now prefers the later CDC port automatically when multiple USB serial ports are exposed."
+                    } else {
+                        "BLE scanning needs Bluetooth permissions, and the app will first try Nordic UART-style serial characteristics before falling back to generic write/notify pairs."
                     },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            Text(
-                state.connectionStatus,
-                color = if (state.connected) Color(0xFF7CFC98) else Color(0xFFFFA46A),
-            )
         }
     }
 }
 
 @Composable
-private fun RemoteCard(
+private fun ControlPage(
     state: ReceiverUiState,
     onStartScan: () -> Unit,
     onStopScan: () -> Unit,
@@ -190,49 +237,64 @@ private fun RemoteCard(
     onRssiChanged: (String) -> Unit,
     onSendRssi: () -> Unit,
 ) {
-    Card {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Remote Commands", style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = onStartScan, enabled = state.connected) {
-                    Text("Start Scan")
+    Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Card {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Remote Commands", style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onStartScan, enabled = state.connected, modifier = Modifier.weight(1f)) {
+                        Text("Start Scan")
+                    }
+                    OutlinedButton(onClick = onStopScan, enabled = state.connected, modifier = Modifier.weight(1f)) {
+                        Text("Stop Scan")
+                    }
                 }
-                OutlinedButton(onClick = onStopScan, enabled = state.connected) {
-                    Text("Stop Scan")
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        modifier = Modifier.weight(1f),
+                        value = state.remoteFrequency,
+                        onValueChange = onFrequencyChanged,
+                        label = { Text("Frequency MHz") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    )
+                    Button(
+                        onClick = onSendFrequency,
+                        enabled = state.connected,
+                        modifier = Modifier.align(Alignment.CenterVertically),
+                    ) {
+                        Text("Send")
+                    }
                 }
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        modifier = Modifier.weight(1f),
+                        value = state.remoteRssiThreshold,
+                        onValueChange = onRssiChanged,
+                        label = { Text("RSSI Min / Off") },
+                        singleLine = true,
+                    )
+                    Button(
+                        onClick = onSendRssi,
+                        enabled = state.connected,
+                        modifier = Modifier.align(Alignment.CenterVertically),
+                    ) {
+                        Text("Send")
+                    }
+                }
+                Text(state.commandStatus, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    modifier = Modifier.weight(1f),
-                    value = state.remoteFrequency,
-                    onValueChange = onFrequencyChanged,
-                    label = { Text("Frequency MHz") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                )
-                Button(onClick = onSendFrequency, enabled = state.connected, modifier = Modifier.align(Alignment.CenterVertically)) {
-                    Text("Send")
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    modifier = Modifier.weight(1f),
-                    value = state.remoteRssiThreshold,
-                    onValueChange = onRssiChanged,
-                    label = { Text("RSSI Min / Off") },
-                    singleLine = true,
-                )
-                Button(onClick = onSendRssi, enabled = state.connected, modifier = Modifier.align(Alignment.CenterVertically)) {
-                    Text("Send")
-                }
-            }
-            Text(state.commandStatus, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+
+        StatsCard(state)
     }
 }
 
 @Composable
-private fun ViewOptionsCard(
+private fun MonitorPage(
     state: ReceiverUiState,
     onViewMode: (ReceiverViewMode) -> Unit,
     onWindowChanged: (Int) -> Unit,
@@ -240,38 +302,62 @@ private fun ViewOptionsCard(
     onToggleRecording: () -> Unit,
     onClearWaterfall: () -> Unit,
 ) {
-    Card {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("View + Capture", style = MaterialTheme.typography.titleMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ToggleChoice("Waveform", state.viewMode == ReceiverViewMode.WAVEFORM) { onViewMode(ReceiverViewMode.WAVEFORM) }
-                ToggleChoice("Waterfall", state.viewMode == ReceiverViewMode.WATERFALL) { onViewMode(ReceiverViewMode.WATERFALL) }
-                Spacer(Modifier.width(8.dp))
+    Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Card {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Monitor", style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ToggleChoice("Waveform", state.viewMode == ReceiverViewMode.WAVEFORM) { onViewMode(ReceiverViewMode.WAVEFORM) }
+                    ToggleChoice("Waterfall", state.viewMode == ReceiverViewMode.WATERFALL) { onViewMode(ReceiverViewMode.WATERFALL) }
+                }
                 SelectionField(
-                    modifier = Modifier.width(110.dp),
-                    label = "Window",
+                    modifier = Modifier.fillMaxWidth(),
+                    label = "Waterfall Window",
                     value = "${state.waterfallWindowSeconds}s",
                     options = listOf("10s", "20s", "30s", "60s", "120s"),
                     onSelect = { selected -> selected.removeSuffix("s").toIntOrNull()?.let(onWindowChanged) },
                 )
-            }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Audio")
-                Switch(checked = state.audioEnabled, onCheckedChange = onAudioChanged)
-                Spacer(Modifier.width(8.dp))
-                Button(onClick = onToggleRecording) {
-                    Text(if (state.recordingEnabled) "Stop Recording" else "Start Recording")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("Audio")
+                        Switch(checked = state.audioEnabled, onCheckedChange = onAudioChanged)
+                    }
+                    Text(
+                        if (state.recordingEnabled) "Recording On" else "Recording Off",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
-                OutlinedButton(onClick = onClearWaterfall) {
-                    Text("Clear Waterfall")
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = onToggleRecording, modifier = Modifier.weight(1f)) {
+                        Text(if (state.recordingEnabled) "Stop Recording" else "Start Recording")
+                    }
+                    OutlinedButton(onClick = onClearWaterfall, modifier = Modifier.weight(1f)) {
+                        Text("Clear Waterfall")
+                    }
                 }
+                Text(state.recordingPath, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(
-                if (state.recordingEnabled) state.recordingPath else "Recording Off",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
+
+        PlotCard(state)
+        StatsCard(state)
+    }
+}
+
+@Composable
+private fun LogsPage(logs: List<String>) {
+    Column(
+        modifier = Modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        LogCard(logs)
     }
 }
 
@@ -280,7 +366,7 @@ private fun StatsCard(state: ReceiverUiState) {
     val burst = state.currentBurst
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Stats", style = MaterialTheme.typography.titleMedium)
+            Text("Burst Stats", style = MaterialTheme.typography.titleMedium)
             StatRow("Session", burst?.session?.toString() ?: "-")
             StatRow("Burst", burst?.burst?.toString() ?: "-")
             StatRow("Frequency", burst?.frequencyHz?.takeIf { it > 0 }?.let { "%.3f MHz".format(it / 1_000_000.0) } ?: "-")
@@ -296,11 +382,11 @@ private fun StatsCard(state: ReceiverUiState) {
 private fun PlotCard(state: ReceiverUiState) {
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(if (state.viewMode == ReceiverViewMode.WAVEFORM) "Waveform" else "Waterfall", style = MaterialTheme.typography.titleMedium)
+            Text(if (state.viewMode == ReceiverViewMode.WAVEFORM) "Live Waveform" else "Live Waterfall", style = MaterialTheme.typography.titleMedium)
             if (state.viewMode == ReceiverViewMode.WAVEFORM) {
-                WaveformChart(state.currentBurst, Modifier.fillMaxWidth().height(260.dp))
+                WaveformChart(state.currentBurst, Modifier.fillMaxWidth().height(280.dp))
             } else {
-                WaterfallChart(state.waterfallRows, Modifier.fillMaxWidth().height(260.dp))
+                WaterfallChart(state.waterfallRows, Modifier.fillMaxWidth().height(280.dp))
             }
         }
     }
@@ -310,11 +396,11 @@ private fun PlotCard(state: ReceiverUiState) {
 private fun LogCard(logs: List<String>) {
     Card {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("Logs", style = MaterialTheme.typography.titleMedium)
+            Text("Receiver Log", style = MaterialTheme.typography.titleMedium)
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(220.dp),
+                    .height(420.dp),
                 color = Color(0xFF091017),
                 shape = RoundedCornerShape(12.dp),
             ) {
@@ -516,15 +602,15 @@ private fun StatRow(label: String, value: String) {
 
 @Composable
 private fun androidReceiverColors() = androidx.compose.material3.darkColorScheme(
-    primary = Color(0xFF66D5FF),
-    onPrimary = Color(0xFF00141B),
-    secondary = Color(0xFF8CF0C3),
-    onSecondary = Color(0xFF032014),
+    primary = Color(0xFF59D8FF),
+    onPrimary = Color(0xFF031018),
+    secondary = Color(0xFF80F0BB),
+    onSecondary = Color(0xFF05180F),
     background = Color(0xFF071018),
-    surface = Color(0xFF0D1822),
-    surfaceVariant = Color(0xFF122130),
-    onSurface = Color(0xFFECF4FA),
-    onSurfaceVariant = Color(0xFF9FB3C8),
+    surface = Color(0xFF0C1822),
+    surfaceVariant = Color(0xFF122432),
+    onSurface = Color(0xFFEAF4FC),
+    onSurfaceVariant = Color(0xFF9FB7C8),
 )
 
 private fun waterfallColor(intensity: Float): Color {
