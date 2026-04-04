@@ -1,0 +1,12 @@
+{"type":"burst_capture","session":1,"burst":80,"freq":915000000,"first_level":0,"timings":[905060],"count":1,"truncated":false,"timestamp":967016,"rssi":-78.5}
+{"type":"burst_capture","session":1,"burst":81,"freq":915000000,"first_level":1,"timings":[477,36704],"count":2,"truncated":false,"timestamp":967020,"rssi":-86.0}
+{"type":"burst_capture","session":1,"burst":82,"freq":915000000,"first_level":1,"timings":[133,1132,99,534,363,298,65,132,97,168,3125,198,112171],"count":13,"truncated":false,"timestamp":967054,"rssi":-105.0}
+{"type":"burst_capture","session":1,"burst":83,"freq":915000000,"first_level":0,"timings":[365856],"count":1,"truncated":false,"timestamp":967538,"rssi":-83.0}
+{"type":"burst_capture","session":1,"burst":84,"freq":915000000,"first_level":1,"timings":[651,104,69,136,917,66,299,134,399,64,451,94,223,1408,797,396,169,134,69,270,101,1062,703],"count":23,"truncated":false,"timestamp":967543,"rssi":-105.0}
+{"type":"burst_capture","session":1,"burst":85,"freq":915000000,"first_level":0,"timings":[930748],"count":1,"truncated":false,"timestamp":968477,"rssi":-104.0}
+{"type":"burst_capture","session":1,"burst":86,"freq":915000000,"first_level":1,"timings":[65,394,63],"count":3,"truncated":false,"timestamp":968483,"rssi":-105.0}
+{"type":"burst_capture","session":1,"burst":87,"freq":915000000,"first_level":0,"timings":[3123330],"count":1,"truncated":false,"timestamp":971601,"rssi":-104.0}
+{"type":"burst_capture","session":1,"burst":88,"freq":915000000,"first_level":1,"timings":[33,23744],"count":2,"truncated":false,"timestamp":971605,"rssi":-103.5}
+{"type":"burst_capture","session":1,"burst":89,"freq":915000000,"first_level":1,"timings":[65],"count":1,"truncated":false,"timestamp":971626,"rssi":-105.0}
+{"type":"burst_capture","session":1,"burst":90,"freq":915000000,"first_level":0,"timings":[2370904],"count":1,"truncated":false,"timestamp":973996,"rssi":-99.5}
+{"type":"burst_capture","session":1,"burst":91,"freq":915000000,"first_level":1,"timings":[3601],"count":1,"truncated":false,"timestamp":974000,"rssi":-105.0}
