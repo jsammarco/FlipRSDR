@@ -216,6 +216,30 @@ The build script writes the final executable to:
 build\FlipRSDR Receiver.exe
 ```
 
+## Android receiver
+
+An Android companion app now lives under `android_receiver/` and is called `Android Receiver`.
+
+- USB serial host support for Flipper CDC serial
+- BLE serial support with Nordic UART fallback plus generic write/notify discovery
+- `fliprsdr` binary and JSON protocol parsing
+- Live waveform and waterfall views
+- Remote commands for `start_scan`, `stop_scan`, `set_frequency`, and `set_rssi_threshold`
+- Optional recording to `.fliprsdr` or `.jsonl`
+- Optional audio playback for completed bursts
+
+Build it from the repo root with:
+
+```powershell
+.\build_android_receiver.ps1
+```
+
+The build script writes the final APK to:
+
+```text
+build\Android Receiver-debug.apk
+```
+
 ## PC analyzer
 
 The offline analysis companion app lives under `analyzer/` and is called `FlipRSDR Analyzer`.
