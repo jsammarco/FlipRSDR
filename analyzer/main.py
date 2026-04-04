@@ -11,6 +11,10 @@ from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import numpy as np
 import pyqtgraph as pg
 from PySide6.QtCore import QSettings, QTimer, Qt
@@ -31,6 +35,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from fliprsdr_protocol import decode_binary_recording
 
 try:
     import winsound
@@ -85,6 +91,19 @@ class RecordingAnalysis:
 
 
 def load_recording(path: Path) -> list[BurstData]:
+    suffix = path.suffix.lower()
+    if suffix == ".fliprsdr":
+        return _load_binary_recording(path)
+    if suffix == ".jsonl":
+        return _load_json_recording(path)
+
+    try:
+        return _load_json_recording(path)
+    except (UnicodeDecodeError, ValueError):
+        return _load_binary_recording(path)
+
+
+def _load_json_recording(path: Path) -> list[BurstData]:
     bursts: list[BurstData] = []
     with path.open("r", encoding="utf-8") as handle:
         for line_number, raw_line in enumerate(handle, start=1):
@@ -112,6 +131,37 @@ def load_recording(path: Path) -> list[BurstData]:
                     truncated=bool(message.get("truncated", False)),
                 )
             )
+
+    bursts.sort(
+        key=lambda burst: (
+            burst.timestamp if burst.timestamp is not None else sys.maxsize,
+            burst.session,
+            burst.burst,
+        )
+    )
+    return bursts
+
+
+def _load_binary_recording(path: Path) -> list[BurstData]:
+    bursts: list[BurstData] = []
+    capture_messages, warnings = decode_binary_recording(path.read_bytes())
+    if warnings and not capture_messages:
+        raise ValueError("; ".join(warnings[:4]))
+
+    for message in capture_messages:
+        bursts.append(
+            BurstData(
+                session=int(message.get("session", 0)),
+                burst=int(message.get("burst", 0)),
+                frequency_hz=int(message.get("freq", 0)),
+                timestamp=int(message["timestamp"]) if "timestamp" in message else None,
+                first_level=bool(int(message.get("first_level", 1))),
+                timings=[int(value) for value in message.get("timings", [])],
+                count=int(message.get("count", len(message.get("timings", [])))),
+                rssi=float(message["rssi"]) if "rssi" in message else None,
+                truncated=bool(message.get("truncated", False)),
+            )
+        )
 
     bursts.sort(
         key=lambda burst: (
@@ -411,7 +461,7 @@ class AnalyzerMainWindow(QMainWindow):
         splitter.setSizes([620, 280])
         main_layout.addWidget(splitter, 1)
 
-        self.statusBar().showMessage("Open a JSONL recording to begin")
+        self.statusBar().showMessage("Open a fliprsdr or JSON recording to begin")
 
         open_action = QAction("Open Recording", self)
         open_action.triggered.connect(self._open_recording)
@@ -461,7 +511,7 @@ class AnalyzerMainWindow(QMainWindow):
             self,
             "Open FlipRSDR recording",
             last_path or str((Path(__file__).resolve().parent.parent / "recordings")),
-            "JSON Lines (*.jsonl);;All Files (*)",
+            "FlipRSDR Binary (*.fliprsdr);;JSON Lines (*.jsonl);;All Files (*)",
         )
         if not selected:
             return

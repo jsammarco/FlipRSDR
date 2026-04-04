@@ -24,6 +24,7 @@ struct FlipRSDRCapture {
     bool in_burst;
     uint32_t session_id;
     uint32_t next_burst_id;
+    uint32_t session_start_tick;
     uint32_t last_event_tick;
     float last_rssi;
     bool overflow_seen;
@@ -67,20 +68,18 @@ static void fliprsdr_capture_flush_live_chunk(FlipRSDRCapture* capture) {
         return;
     }
 
-    char line[FLIPRSDR_PROTOCOL_LINE_MAX];
-    fliprsdr_protocol_format_timing_chunk(
-        line,
-        sizeof(line),
+    fliprsdr_protocol_enqueue_timing_chunk(
+        capture->transport,
+        &capture->settings,
         capture->working.session_id,
         capture->working.burst_id,
         capture->live_chunk,
         capture->live_chunk_count);
-    fliprsdr_transport_enqueue_line(capture->transport, line);
     capture->live_chunk_count = 0U;
 }
 
 static void fliprsdr_capture_begin_burst(FlipRSDRCapture* capture, bool first_level) {
-    const uint32_t timestamp_ms = furi_get_tick();
+    const uint32_t timestamp_ms = furi_get_tick() - capture->session_start_tick;
     fliprsdr_burst_buffer_start(
         &capture->working,
         capture->session_id,
@@ -92,10 +91,8 @@ static void fliprsdr_capture_begin_burst(FlipRSDRCapture* capture, bool first_le
     capture->live_chunk_count = 0U;
 
     if(fliprsdr_capture_stream_live_enabled(capture)) {
-        char line[FLIPRSDR_PROTOCOL_LINE_MAX];
-        fliprsdr_protocol_format_burst_start(
-            line, sizeof(line), &capture->working, &capture->settings);
-        fliprsdr_transport_enqueue_line(capture->transport, line);
+        fliprsdr_protocol_enqueue_burst_start(
+            capture->transport, &capture->working, &capture->settings);
     }
 }
 
@@ -108,10 +105,8 @@ static void fliprsdr_capture_finish_burst(FlipRSDRCapture* capture, bool truncat
     fliprsdr_burst_buffer_complete(&capture->working, capture->last_rssi);
 
     if(fliprsdr_capture_stream_live_enabled(capture)) {
-        char line[FLIPRSDR_PROTOCOL_LINE_MAX];
-        fliprsdr_protocol_format_burst_end(
-            line, sizeof(line), &capture->working, &capture->settings);
-        fliprsdr_transport_enqueue_line(capture->transport, line);
+        fliprsdr_protocol_enqueue_burst_end(
+            capture->transport, &capture->working, &capture->settings);
     }
 
     if(fliprsdr_capture_store_local_enabled(capture)) {
@@ -244,6 +239,7 @@ FlipRSDRCapture* fliprsdr_capture_alloc(FlipRSDRTransport* transport) {
     capture->in_burst = false;
     capture->session_id = 0U;
     capture->next_burst_id = 1U;
+    capture->session_start_tick = 0U;
     capture->last_event_tick = 0U;
     capture->last_rssi = 0.0f;
     capture->overflow_seen = false;
@@ -282,6 +278,7 @@ bool fliprsdr_capture_start(FlipRSDRCapture* capture) {
 
     capture->session_id++;
     capture->next_burst_id = 1U;
+    capture->session_start_tick = furi_get_tick();
     capture->last_rssi = 0.0f;
     capture->overflow_seen = false;
     capture->callback_overrun = false;
@@ -295,7 +292,7 @@ bool fliprsdr_capture_start(FlipRSDRCapture* capture) {
     capture->raw_stream = furi_stream_buffer_alloc(
         sizeof(LevelDuration) * FLIPRSDR_CAPTURE_STREAM_DEPTH, sizeof(LevelDuration));
     capture->worker_thread =
-        furi_thread_alloc_ex("FlipRSDRCap", 2048, fliprsdr_capture_worker, capture);
+        furi_thread_alloc_ex("FlipRSDRCap", 4096, fliprsdr_capture_worker, capture);
 
     furi_hal_subghz_reset();
     furi_hal_subghz_load_custom_preset(subghz_device_cc1101_preset_ook_270khz_async_regs);

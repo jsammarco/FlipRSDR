@@ -7,7 +7,7 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
 - Captures ordered pulse/gap durations in microseconds using the firmware async Sub-GHz receive path
 - Detects burst start, burst continuation, and burst end from gap timing and idle timeout
 - Preserves the full timing burst locally in buffered modes, including truncation and overflow flags
-- Streams JSON lines that a future PC tool can use for replay, visualization, or audio-style rendering
+- Streams the compact `fliprsdr` binary protocol by default, with JSON kept as a debug option
 - Supports USB CDC on dual-CDC channel `1` and BLE serial
 
 ## Screenshots
@@ -70,6 +70,7 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
   - Frequency preset
   - Frequency fine-tune offset
   - Transport
+  - Protocol format
   - Streaming mode
   - Auto-send after burst complete
   - Include RSSI
@@ -82,21 +83,14 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
 
 ## Streaming format
 
-Live modes emit JSON lines like:
+The default serial format is the custom `fliprsdr` binary protocol defined in `fliprsdr_binary_protocol_spec.md`. It uses:
 
-```json
-{"type":"burst_start","session":1,"burst":1,"freq":433920000,"first_level":1,"timestamp":12345}
-{"type":"timing_chunk","session":1,"burst":1,"timings":[350,1050,350,350,1050,350]}
-{"type":"burst_end","session":1,"burst":1,"count":123,"rssi":-58.0,"truncated":false}
-```
+- COBS framing with `0x00` delimiters
+- CRC-16/XMODEM integrity checks
+- little-endian metadata fields
+- unsigned varints for timing arrays
 
-Buffered send emits:
-
-```json
-{"type":"burst_capture","session":1,"burst":1,"freq":433920000,"first_level":1,"timestamp":12345,"timings":[...],"count":123,"rssi":-58.0,"truncated":false}
-```
-
-`first_level` is included so the PC side can reconstruct the exact pulse/gap ordering even if the first received interval is a gap.
+JSON remains available as a compatibility/debug option. In either format, `first_level` is preserved so the PC side can reconstruct the exact pulse/gap ordering even if the first received interval is a gap.
 
 ## File structure
 
@@ -119,7 +113,7 @@ Buffered send emits:
 - `app/transport_ble.c`
   - BLE serial transport backend
 - `app/protocol.c` / `app/protocol.h`
-  - JSON formatting and buffered capture serialization
+  - `fliprsdr` binary encoding plus JSON compatibility formatting
 - `views/capture_view.c` / `views/capture_view.h`
   - Custom capture status screen
 - `scenes/`
@@ -177,7 +171,7 @@ The Windows desktop companion app lives under `receiver/` and is called `FlipRSD
 - Live serial ingest from the Flipper CDC stream
 - Waveform view for the current pulse train
 - Waterfall view using log-duration bins with SDR-style coloring
-- Optional recording of completed bursts to JSONL
+- Optional recording of completed bursts to `.fliprsdr` binary files or JSONL
 - Optional audible playback of completed bursts
 - Automatic port refresh while disconnected, plus last-port recall on restart
 
@@ -197,7 +191,7 @@ build\FlipRSDR Receiver.exe
 
 The offline analysis companion app lives under `analyzer/` and is called `FlipRSDR Analyzer`.
 
-- Loads saved JSONL recordings from the receiver
+- Loads saved `.fliprsdr` recordings from the receiver, plus legacy JSONL
 - Replays bursts over recording time with optional audio playback
 - Shows waveform and a full recording waterfall view
 - Highlights repeated timing signatures and likely frame-like bursts

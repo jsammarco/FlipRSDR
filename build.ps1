@@ -53,9 +53,15 @@ if(!(Test-Path $targetDir)) {
 
 $stalePaths = @(
     (Join-Path $targetDir "build.ps1"),
+    (Join-Path $targetDir "build_analyzer.ps1"),
     (Join-Path $targetDir "build_receiver.ps1"),
     (Join-Path $targetDir "build"),
-    (Join-Path $targetDir "receiver")
+    (Join-Path $targetDir "receiver"),
+    (Join-Path $targetDir "analyzer"),
+    (Join-Path $targetDir "recordings"),
+    (Join-Path $targetDir "screenshots"),
+    (Join-Path $targetDir "__pycache__"),
+    (Join-Path $targetDir "fliprsdr_protocol.py")
 )
 
 if(-not $PreviewSync) {
@@ -77,12 +83,19 @@ $robocopyArgs = @(
     "/MIR"
     "/XD"
     ".git"
+    "__pycache__"
+    "analyzer"
     "build"
+    "recordings"
     "receiver"
+    "screenshots"
     "/XF"
     "README.md"
     "build.ps1"
+    "build_analyzer.ps1"
     "build_receiver.ps1"
+    "*.py"
+    "*.pyc"
 )
 
 if($PreviewSync) {

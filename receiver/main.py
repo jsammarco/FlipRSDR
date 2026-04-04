@@ -13,6 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 import numpy as np
 import pyqtgraph as pg
 import serial
@@ -36,6 +40,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from fliprsdr_protocol import (
+    BinaryStreamDecoder,
+    PROTOCOL_FORMAT_FLIPRSDR,
+    PROTOCOL_FORMAT_JSON,
+    encode_recording_burst,
+    format_message_log,
+)
+
 try:
     import winsound
 except ImportError:  # pragma: no cover - only used on Windows builds
@@ -54,6 +66,7 @@ WATERFALL_MAX_US = 65536.0
 WAVEFORM_UPDATE_INTERVAL_S = 0.05
 WATERFALL_REFRESH_INTERVAL_MS = 250
 WATERFALL_X_TICKS_US = [16, 32, 64, 128, 256, 512, 1000, 2000, 4000, 8000, 16000, 32000, 65536]
+PROTOCOL_OPTIONS = [PROTOCOL_FORMAT_FLIPRSDR, PROTOCOL_FORMAT_JSON]
 
 
 @dataclass
@@ -120,12 +133,20 @@ class SerialReceiverThread(QThread):
     burst_completed = Signal(object)
     parse_warning = Signal(str)
 
-    def __init__(self, port_name: str, baud_rate: int, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        port_name: str,
+        baud_rate: int,
+        protocol_format: str,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._port_name = port_name
         self._baud_rate = baud_rate
+        self._protocol_format = protocol_format
         self._stop_event = threading.Event()
         self._bursts: dict[tuple[int, int], BurstData] = {}
+        self._binary_decoder = BinaryStreamDecoder()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -149,12 +170,24 @@ class SerialReceiverThread(QThread):
 
                 while not self._stop_event.is_set():
                     try:
-                        raw = serial_port.readline()
+                        if self._protocol_format == PROTOCOL_FORMAT_FLIPRSDR:
+                            raw = serial_port.read(max(1, serial_port.in_waiting or 0))
+                        else:
+                            raw = serial_port.readline()
                     except serial.SerialException as exc:
                         self.status_changed.emit(f"Serial read failed: {exc}")
                         break
 
                     if not raw:
+                        continue
+
+                    if self._protocol_format == PROTOCOL_FORMAT_FLIPRSDR:
+                        messages, warnings = self._binary_decoder.feed(raw)
+                        for warning in warnings:
+                            self.parse_warning.emit(f"fliprsdr parse warning: {warning}")
+                        for message in messages:
+                            self.raw_line_received.emit(format_message_log(message))
+                            self._handle_message(message)
                         continue
 
                     text = raw.decode("utf-8", errors="replace").strip()
@@ -268,7 +301,7 @@ class ReceiverMainWindow(QMainWindow):
         self._receiver_thread: SerialReceiverThread | None = None
         self._current_burst: BurstData | None = None
         self._last_waveform_update = 0.0
-        self._record_file_handle: io.TextIOWrapper | None = None
+        self._record_file_handle: io.TextIOWrapper | io.BufferedWriter | None = None
         self._recording_path: Path | None = None
         self._waterfall_window_s = DEFAULT_WATERFALL_WINDOW_S
         self._waterfall_entries: deque[tuple[float, np.ndarray]] = deque()
@@ -310,6 +343,8 @@ class ReceiverMainWindow(QMainWindow):
         self.baud_combo = QComboBox()
         self.baud_combo.addItems(["9600", "57600", "115200", "230400", "460800", "921600"])
         self.baud_combo.setCurrentText(str(DEFAULT_BAUD_RATE))
+        self.protocol_combo = QComboBox()
+        self.protocol_combo.addItems(PROTOCOL_OPTIONS)
         self.connect_button = QPushButton("Connect")
         self.view_combo = QComboBox()
         self.view_combo.addItems(["Waveform", "Waterfall"])
@@ -331,6 +366,7 @@ class ReceiverMainWindow(QMainWindow):
         self.clear_waterfall_button.clicked.connect(self._clear_waterfall)
         self.port_combo.currentTextChanged.connect(self._on_port_selection_changed)
         self.baud_combo.currentTextChanged.connect(self._on_baud_selection_changed)
+        self.protocol_combo.currentTextChanged.connect(self._on_protocol_selection_changed)
 
         control_row.addWidget(QLabel("Port"))
         control_row.addWidget(self.port_combo)
@@ -338,6 +374,9 @@ class ReceiverMainWindow(QMainWindow):
         control_row.addSpacing(8)
         control_row.addWidget(QLabel("Baud"))
         control_row.addWidget(self.baud_combo)
+        control_row.addSpacing(8)
+        control_row.addWidget(QLabel("Protocol"))
+        control_row.addWidget(self.protocol_combo)
         control_row.addSpacing(8)
         control_row.addWidget(self.connect_button)
         control_row.addSpacing(16)
@@ -515,9 +554,11 @@ class ReceiverMainWindow(QMainWindow):
             return
 
         baud_rate = int(self.baud_combo.currentText())
+        protocol_format = self.protocol_combo.currentText().strip() or PROTOCOL_FORMAT_FLIPRSDR
         self._settings.setValue("serial/last_port", port_name)
         self._settings.setValue("serial/baud_rate", baud_rate)
-        self._receiver_thread = SerialReceiverThread(port_name, baud_rate, self)
+        self._settings.setValue("serial/protocol", protocol_format)
+        self._receiver_thread = SerialReceiverThread(port_name, baud_rate, protocol_format, self)
         self._receiver_thread.status_changed.connect(self._on_status_changed)
         self._receiver_thread.raw_line_received.connect(self._append_log_line)
         self._receiver_thread.burst_started.connect(self._on_burst_started)
@@ -541,6 +582,7 @@ class ReceiverMainWindow(QMainWindow):
         self.connect_button.setText("Disconnect" if connected else "Connect")
         self.port_combo.setEnabled(not connected)
         self.baud_combo.setEnabled(not connected)
+        self.protocol_combo.setEnabled(not connected)
         self.refresh_ports_button.setEnabled(not connected)
 
     def _on_port_selection_changed(self, port_name: str) -> None:
@@ -550,6 +592,10 @@ class ReceiverMainWindow(QMainWindow):
     def _on_baud_selection_changed(self, baud_rate: str) -> None:
         if baud_rate.strip():
             self._settings.setValue("serial/baud_rate", baud_rate.strip())
+
+    def _on_protocol_selection_changed(self, protocol_format: str) -> None:
+        if protocol_format.strip():
+            self._settings.setValue("serial/protocol", protocol_format.strip())
 
     def _on_audio_toggled(self, enabled: bool) -> None:
         if not enabled:
@@ -742,9 +788,15 @@ class ReceiverMainWindow(QMainWindow):
     def _start_recording(self) -> None:
         target_dir = self._recording_path or self._default_recordings_dir()
         target_dir.mkdir(parents=True, exist_ok=True)
-        filename = time.strftime("fliprsdr_receiver_%Y%m%d_%H%M%S.jsonl")
+        protocol_format = self.protocol_combo.currentText().strip() or PROTOCOL_FORMAT_FLIPRSDR
+        extension = ".fliprsdr" if protocol_format == PROTOCOL_FORMAT_FLIPRSDR else ".jsonl"
+        filename = time.strftime(f"fliprsdr_receiver_%Y%m%d_%H%M%S{extension}")
         path = target_dir / filename
-        self._record_file_handle = path.open("w", encoding="utf-8")
+        self._record_file_handle = (
+            path.open("wb")
+            if protocol_format == PROTOCOL_FORMAT_FLIPRSDR
+            else path.open("w", encoding="utf-8")
+        )
         self.recording_value.setText(str(path))
         self.record_button.setText("Stop Recording")
         self.statusBar().showMessage(f"Recording to {path}", 4000)
@@ -762,8 +814,14 @@ class ReceiverMainWindow(QMainWindow):
     def _write_recording_line(self, burst: BurstData) -> None:
         if not self._record_file_handle:
             return
-        self._record_file_handle.write(json.dumps(burst.to_capture_dict(), separators=(",", ":")))
-        self._record_file_handle.write("\n")
+        protocol_format = self.protocol_combo.currentText().strip() or PROTOCOL_FORMAT_FLIPRSDR
+        if protocol_format == PROTOCOL_FORMAT_FLIPRSDR:
+            assert isinstance(self._record_file_handle, io.BufferedWriter)
+            self._record_file_handle.write(encode_recording_burst(burst.to_capture_dict()))
+        else:
+            assert isinstance(self._record_file_handle, io.TextIOWrapper)
+            self._record_file_handle.write(json.dumps(burst.to_capture_dict(), separators=(",", ":")))
+            self._record_file_handle.write("\n")
         self._record_file_handle.flush()
 
     def _play_burst_audio(self, burst: BurstData) -> None:
@@ -831,6 +889,15 @@ class ReceiverMainWindow(QMainWindow):
         if baud_index >= 0:
             self.baud_combo.setCurrentIndex(baud_index)
 
+        saved_protocol = str(
+            self._settings.value("serial/protocol", PROTOCOL_FORMAT_FLIPRSDR, type=str)
+        ).strip()
+        protocol_index = self.protocol_combo.findText(saved_protocol)
+        if protocol_index >= 0:
+            self.protocol_combo.setCurrentIndex(protocol_index)
+        else:
+            self.protocol_combo.setCurrentText(PROTOCOL_FORMAT_FLIPRSDR)
+
         saved_waterfall_window = int(
             self._settings.value("waterfall/window_s", DEFAULT_WATERFALL_WINDOW_S, type=int)
         )
@@ -847,6 +914,7 @@ class ReceiverMainWindow(QMainWindow):
     def _save_ui_settings(self) -> None:
         self._settings.setValue("serial/last_port", self.port_combo.currentText().strip())
         self._settings.setValue("serial/baud_rate", self.baud_combo.currentText().strip())
+        self._settings.setValue("serial/protocol", self.protocol_combo.currentText().strip())
         self._settings.setValue("waterfall/window_s", self._waterfall_window_s)
         if self._recording_path is not None:
             self._settings.setValue("recording/path", str(self._recording_path))

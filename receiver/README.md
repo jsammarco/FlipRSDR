@@ -7,19 +7,17 @@ FlipRSDR Receiver is the PC-side companion app for the Flipper Zero `FlipRSDR` e
 - Live USB serial ingest from the Flipper Zero CDC stream
 - Waveform view of the current pulse/gap timing burst
 - Waterfall view using log-duration bins with SDR-style peak coloring
-- Recording completed bursts to JSONL for later analysis
+- Recording completed bursts to `.fliprsdr` by default, with JSONL still available
 - Optional audible playback of completed bursts through the default Windows audio device
 
 ## Expected input
 
-The receiver understands the JSON lines emitted by the Flipper app:
+The receiver understands both Flipper output modes:
 
-- `burst_start`
-- `timing_chunk`
-- `burst_end`
-- `burst_capture`
+- `fliprsdr` binary packets framed with COBS and `0x00` delimiters
+- JSON `burst_start`, `timing_chunk`, `burst_end`, and `burst_capture` messages
 
-It also tolerates serial monitor prefixes and extracts the JSON object from each line.
+The protocol selector in the app defaults to `fliprsdr`.
 
 ## Running from source
 

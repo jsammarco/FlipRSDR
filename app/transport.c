@@ -2,9 +2,11 @@
 
 #include "transport_i.h"
 
+#include <string.h>
+
 typedef struct {
     size_t length;
-    char data[FLIPRSDR_PROTOCOL_LINE_MAX];
+    char data[FLIPRSDR_TRANSPORT_MESSAGE_MAX];
 } FlipRSDRTransportMessage;
 
 struct FlipRSDRTransport {
@@ -14,6 +16,7 @@ struct FlipRSDRTransport {
     FuriMessageQueue* queue;
     FuriThread* thread;
     FuriMutex* mutex;
+    uint16_t next_sequence;
     FlipRSDRTransportSnapshot snapshot;
 };
 
@@ -82,6 +85,7 @@ FlipRSDRTransport* fliprsdr_transport_alloc(void) {
     transport->thread =
         furi_thread_alloc_ex("FlipRSDRTx", 1536, fliprsdr_transport_tx_worker, transport);
     transport->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
+    transport->next_sequence = 0U;
     transport->snapshot = (FlipRSDRTransportSnapshot){
         .kind = FlipRSDRTransportKindUsb,
         .state = FlipRSDRTransportStateDisconnected,
@@ -159,10 +163,20 @@ bool fliprsdr_transport_enqueue_line(FlipRSDRTransport* transport, const char* l
     furi_assert(line);
 
     const size_t length = strlen(line);
-    if(length >= FLIPRSDR_PROTOCOL_LINE_MAX) return false;
+    return fliprsdr_transport_enqueue_bytes(transport, (const uint8_t*)line, length);
+}
+
+bool fliprsdr_transport_enqueue_bytes(
+    FlipRSDRTransport* transport,
+    const uint8_t* data,
+    size_t length) {
+    furi_assert(transport);
+    furi_assert(data);
+
+    if(length == 0U || length > FLIPRSDR_TRANSPORT_MESSAGE_MAX) return false;
 
     FlipRSDRTransportMessage message = {.length = length};
-    memcpy(message.data, line, length);
+    memcpy(message.data, data, length);
     return furi_message_queue_put(transport->queue, &message, 0) == FuriStatusOk;
 }
 
@@ -186,6 +200,16 @@ bool fliprsdr_transport_send_direct(
 bool fliprsdr_transport_send_direct_cstr(FlipRSDRTransport* transport, const char* text) {
     furi_assert(text);
     return fliprsdr_transport_send_direct(transport, text, strlen(text));
+}
+
+uint16_t fliprsdr_transport_next_sequence(FlipRSDRTransport* transport) {
+    furi_assert(transport);
+
+    uint16_t sequence = 0U;
+    furi_check(furi_mutex_acquire(transport->mutex, FuriWaitForever) == FuriStatusOk);
+    sequence = transport->next_sequence++;
+    furi_check(furi_mutex_release(transport->mutex) == FuriStatusOk);
+    return sequence;
 }
 
 void fliprsdr_transport_copy_snapshot(

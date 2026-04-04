@@ -11,12 +11,15 @@ extern "C" {
 
 #define FLIPRSDR_SETTINGS_PATH                  APP_DATA_PATH("fliprsdr.settings")
 #define FLIPRSDR_SETTINGS_MAGIC                 0x52U
-#define FLIPRSDR_SETTINGS_VERSION               4U
-#define FLIPRSDR_BURST_TIMINGS_CAPACITY         8192U
-#define FLIPRSDR_CAPTURE_STREAM_DEPTH           2048U
+#define FLIPRSDR_SETTINGS_VERSION               5U
+#define FLIPRSDR_BURST_TIMINGS_CAPACITY         4096U
+#define FLIPRSDR_CAPTURE_STREAM_DEPTH           1024U
 #define FLIPRSDR_PROTOCOL_LINE_MAX              256U
+#define FLIPRSDR_PROTOCOL_PACKET_MAX            512U
+#define FLIPRSDR_PROTOCOL_CAPTURE_MAX           4096U
 #define FLIPRSDR_PROTOCOL_CHUNK_TIMINGS         16U
 #define FLIPRSDR_TRANSPORT_QUEUE_DEPTH          16U
+#define FLIPRSDR_TRANSPORT_MESSAGE_MAX          512U
 #define FLIPRSDR_PREVIEW_GRAPH_POINTS           48U
 #define FLIPRSDR_USB_VCP_CHANNEL                1U
 #define FLIPRSDR_USB_SEND_TIMEOUT_MS            200U
@@ -36,6 +39,12 @@ typedef enum {
     FlipRSDRTransportKindBle,
     FlipRSDRTransportKindCount,
 } FlipRSDRTransportKind;
+
+typedef enum {
+    FlipRSDRProtocolFormatFlipRSDR,
+    FlipRSDRProtocolFormatJson,
+    FlipRSDRProtocolFormatCount,
+} FlipRSDRProtocolFormat;
 
 typedef enum {
     FlipRSDRStreamModeLive,
@@ -62,6 +71,7 @@ typedef enum {
 typedef struct {
     uint32_t frequency_hz;
     uint8_t transport_kind;
+    uint8_t protocol_format;
     uint8_t stream_mode;
     bool auto_send_after_burst;
     bool include_rssi;

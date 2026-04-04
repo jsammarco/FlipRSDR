@@ -20,6 +20,7 @@ bool fliprsdr_settings_parse_frequency_text(const char* text, uint32_t* frequenc
 void fliprsdr_settings_frequency_text(uint32_t frequency_hz, char* buffer, size_t size);
 const char* fliprsdr_settings_frequency_label(uint8_t preset_index);
 const char* fliprsdr_settings_transport_label(uint8_t transport_index);
+const char* fliprsdr_settings_protocol_label(uint8_t protocol_index);
 const char* fliprsdr_settings_stream_mode_label(uint8_t mode_index);
 const char* fliprsdr_settings_bool_label(bool value);
 

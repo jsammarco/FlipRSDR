@@ -1,10 +1,10 @@
 # FlipRSDR Analyzer
 
-FlipRSDR Analyzer is an offline desktop app for exploring the JSONL recordings produced by `FlipRSDR Receiver`.
+FlipRSDR Analyzer is an offline desktop app for exploring the recordings produced by `FlipRSDR Receiver`.
 
 ## Features
 
-- Loads saved `burst_capture` JSONL files
+- Loads saved `.fliprsdr` recordings and legacy `burst_capture` JSONL files
 - Replays bursts over time with optional audio
 - Shows per-burst waveform and a recording-wide waterfall
 - Adds a burst timeline so you can scrub through activity over time

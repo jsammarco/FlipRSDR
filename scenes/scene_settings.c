@@ -4,6 +4,7 @@ enum {
     FlipRSDRSettingsItemPreset = 0,
     FlipRSDRSettingsItemFrequency,
     FlipRSDRSettingsItemTransport,
+    FlipRSDRSettingsItemProtocol,
     FlipRSDRSettingsItemStreamMode,
     FlipRSDRSettingsItemAutoSend,
     FlipRSDRSettingsItemIncludeRssi,
@@ -36,6 +37,14 @@ static void fliprsdr_scene_settings_transport_changed(VariableItem* item) {
     variable_item_set_current_value_text(item, fliprsdr_settings_transport_label(index));
     app->settings_dirty = true;
     app->transport_dirty = true;
+}
+
+static void fliprsdr_scene_settings_protocol_changed(VariableItem* item) {
+    FlipRSDRApp* app = variable_item_get_context(item);
+    const uint8_t index = variable_item_get_current_value_index(item);
+    app->settings.protocol_format = index;
+    variable_item_set_current_value_text(item, fliprsdr_settings_protocol_label(index));
+    app->settings_dirty = true;
 }
 
 static void fliprsdr_scene_settings_stream_mode_changed(VariableItem* item) {
@@ -161,6 +170,16 @@ void fliprsdr_scene_settings_on_enter(void* context) {
     variable_item_set_current_value_index(item, app->settings.transport_kind);
     variable_item_set_current_value_text(
         item, fliprsdr_settings_transport_label(app->settings.transport_kind));
+
+    item = variable_item_list_add(
+        app->variable_item_list,
+        "Protocol",
+        FlipRSDRProtocolFormatCount,
+        fliprsdr_scene_settings_protocol_changed,
+        app);
+    variable_item_set_current_value_index(item, app->settings.protocol_format);
+    variable_item_set_current_value_text(
+        item, fliprsdr_settings_protocol_label(app->settings.protocol_format));
 
     item = variable_item_list_add(
         app->variable_item_list,

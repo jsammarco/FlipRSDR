@@ -28,6 +28,23 @@ typedef struct {
     FlipRSDRSettingsV3 settings;
 } FlipRSDRSettingsStoreV3;
 
+typedef struct {
+    uint32_t frequency_hz;
+    uint8_t transport_kind;
+    uint8_t stream_mode;
+    bool auto_send_after_burst;
+    bool include_rssi;
+    bool include_timestamp;
+    uint16_t max_pulse_count;
+    uint16_t capture_timeout_ms;
+    uint16_t gap_threshold_ms;
+    uint16_t preview_bandwidth_khz;
+} FlipRSDRSettingsV4;
+
+typedef struct {
+    FlipRSDRSettingsV4 settings;
+} FlipRSDRSettingsStoreV4;
+
 static const uint32_t fliprsdr_frequency_values[FlipRSDRFrequencyPresetCount] = {
     300000000UL,
     315000000UL,
@@ -51,14 +68,19 @@ static const char* fliprsdr_transport_labels[FlipRSDRTransportKindCount] = {
     "Bluetooth",
 };
 
+static const char* fliprsdr_protocol_labels[FlipRSDRProtocolFormatCount] = {
+    "fliprsdr",
+    "JSON",
+};
+
 static const char* fliprsdr_stream_mode_labels[FlipRSDRStreamModeCount] = {
     "Live stream",
     "Buffered",
     "Live + buffer",
 };
 
-static const uint16_t fliprsdr_max_pulse_options[] = {256, 512, 1024, 2048, 4096, 8192};
-static const char* fliprsdr_max_pulse_labels[] = {"256", "512", "1024", "2048", "4096", "8192"};
+static const uint16_t fliprsdr_max_pulse_options[] = {256, 512, 1024, 2048, 4096};
+static const char* fliprsdr_max_pulse_labels[] = {"256", "512", "1024", "2048", "4096"};
 
 static const uint16_t fliprsdr_capture_timeout_options[] = {100, 250, 500, 1000, 2000, 5000};
 static const char* fliprsdr_capture_timeout_labels[] = {
@@ -100,6 +122,29 @@ static bool fliprsdr_settings_load_v3(FlipRSDRSettings* settings) {
         fliprsdr_settings_frequency_value(store.settings.frequency_preset) +
         ((int32_t)store.settings.frequency_offset_khz * 1000L);
     settings->transport_kind = store.settings.transport_kind;
+    settings->protocol_format = FlipRSDRProtocolFormatFlipRSDR;
+    settings->stream_mode = store.settings.stream_mode;
+    settings->auto_send_after_burst = store.settings.auto_send_after_burst;
+    settings->include_rssi = store.settings.include_rssi;
+    settings->include_timestamp = store.settings.include_timestamp;
+    settings->max_pulse_count = store.settings.max_pulse_count;
+    settings->capture_timeout_ms = store.settings.capture_timeout_ms;
+    settings->gap_threshold_ms = store.settings.gap_threshold_ms;
+    settings->preview_bandwidth_khz = store.settings.preview_bandwidth_khz;
+    return true;
+}
+
+static bool fliprsdr_settings_load_v4(FlipRSDRSettings* settings) {
+    FlipRSDRSettingsStoreV4 store = {0};
+
+    if(!saved_struct_load(
+           FLIPRSDR_SETTINGS_PATH, &store, sizeof(store), FLIPRSDR_SETTINGS_MAGIC, 4U)) {
+        return false;
+    }
+
+    settings->frequency_hz = store.settings.frequency_hz;
+    settings->transport_kind = store.settings.transport_kind;
+    settings->protocol_format = FlipRSDRProtocolFormatFlipRSDR;
     settings->stream_mode = store.settings.stream_mode;
     settings->auto_send_after_burst = store.settings.auto_send_after_burst;
     settings->include_rssi = store.settings.include_rssi;
@@ -115,6 +160,7 @@ void fliprsdr_settings_load_defaults(FlipRSDRSettings* settings) {
     furi_assert(settings);
     settings->frequency_hz = 433920000UL;
     settings->transport_kind = FlipRSDRTransportKindUsb;
+    settings->protocol_format = FlipRSDRProtocolFormatFlipRSDR;
     settings->stream_mode = FlipRSDRStreamModeBuffered;
     settings->auto_send_after_burst = false;
     settings->include_rssi = true;
@@ -133,6 +179,9 @@ void fliprsdr_settings_validate(FlipRSDRSettings* settings) {
     }
     if(settings->transport_kind >= FlipRSDRTransportKindCount) {
         settings->transport_kind = FlipRSDRTransportKindUsb;
+    }
+    if(settings->protocol_format >= FlipRSDRProtocolFormatCount) {
+        settings->protocol_format = FlipRSDRProtocolFormatFlipRSDR;
     }
     if(settings->stream_mode >= FlipRSDRStreamModeCount) {
         settings->stream_mode = FlipRSDRStreamModeBuffered;
@@ -184,6 +233,12 @@ bool fliprsdr_settings_load(FlipRSDRSettings* settings) {
 
     if(version == 3U && payload_size == sizeof(FlipRSDRSettingsStoreV3) &&
        fliprsdr_settings_load_v3(settings)) {
+        fliprsdr_settings_validate(settings);
+        return true;
+    }
+
+    if(version == 4U && payload_size == sizeof(FlipRSDRSettingsStoreV4) &&
+       fliprsdr_settings_load_v4(settings)) {
         fliprsdr_settings_validate(settings);
         return true;
     }
@@ -296,6 +351,11 @@ const char* fliprsdr_settings_frequency_label(uint8_t preset_index) {
 const char* fliprsdr_settings_transport_label(uint8_t transport_index) {
     if(transport_index >= FlipRSDRTransportKindCount) return "?";
     return fliprsdr_transport_labels[transport_index];
+}
+
+const char* fliprsdr_settings_protocol_label(uint8_t protocol_index) {
+    if(protocol_index >= FlipRSDRProtocolFormatCount) return "?";
+    return fliprsdr_protocol_labels[protocol_index];
 }
 
 const char* fliprsdr_settings_stream_mode_label(uint8_t mode_index) {
