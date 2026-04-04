@@ -9,10 +9,72 @@ typedef struct {
     FuriHalUsbInterface* previous_interface;
     FuriSemaphore* tx_semaphore;
     FuriMutex* usb_mutex;
+    FuriThread* rx_thread;
+    FuriEventFlag* rx_events;
     bool usb_was_locked;
     bool usb_connected;
     bool dtr_asserted;
+    char rx_line[FLIPRSDR_COMMAND_LINE_MAX];
+    uint16_t rx_line_length;
 } FlipRSDRTransportUsbContext;
+
+enum {
+    FlipRSDRUsbEventStop = (1U << 0),
+    FlipRSDRUsbEventRx = (1U << 1),
+};
+
+static void fliprsdr_transport_usb_process_rx_bytes(
+    FlipRSDRTransportUsbContext* context,
+    const uint8_t* data,
+    size_t length) {
+    for(size_t i = 0; i < length; i++) {
+        const char ch = (char)data[i];
+        if((ch == '\r') || (ch == '\n')) {
+            if(context->rx_line_length > 0U) {
+                context->rx_line[context->rx_line_length] = '\0';
+                fliprsdr_transport_receive_line(context->transport, context->rx_line);
+                context->rx_line_length = 0U;
+            }
+            continue;
+        }
+
+        if(context->rx_line_length < (FLIPRSDR_COMMAND_LINE_MAX - 1U)) {
+            context->rx_line[context->rx_line_length++] = ch;
+        }
+    }
+}
+
+static int32_t fliprsdr_transport_usb_rx_worker(void* context_ptr) {
+    FlipRSDRTransportUsbContext* context = context_ptr;
+    uint8_t buffer[CDC_DATA_SZ];
+
+    while(true) {
+        const uint32_t events = furi_event_flag_wait(
+            context->rx_events,
+            FlipRSDRUsbEventStop | FlipRSDRUsbEventRx,
+            FuriFlagWaitAny,
+            FuriWaitForever);
+
+        if(events & FlipRSDRUsbEventStop) {
+            break;
+        }
+
+        if(events & FlipRSDRUsbEventRx) {
+            while(true) {
+                int32_t received = 0;
+                furi_check(furi_mutex_acquire(context->usb_mutex, FuriWaitForever) == FuriStatusOk);
+                received = furi_hal_cdc_receive(FLIPRSDR_USB_VCP_CHANNEL, buffer, sizeof(buffer));
+                furi_check(furi_mutex_release(context->usb_mutex) == FuriStatusOk);
+                if(received <= 0) {
+                    break;
+                }
+                fliprsdr_transport_usb_process_rx_bytes(context, buffer, (size_t)received);
+            }
+        }
+    }
+
+    return 0;
+}
 
 static void fliprsdr_transport_usb_update_status(FlipRSDRTransportUsbContext* context) {
     const bool connected = context->usb_connected && context->dtr_asserted;
@@ -29,7 +91,8 @@ static void fliprsdr_transport_usb_tx_callback(void* context) {
 }
 
 static void fliprsdr_transport_usb_rx_callback(void* context) {
-    UNUSED(context);
+    FlipRSDRTransportUsbContext* usb = context;
+    furi_event_flag_set(usb->rx_events, FlipRSDRUsbEventRx);
 }
 
 static void fliprsdr_transport_usb_state_callback(void* context, CdcState state) {
@@ -66,9 +129,13 @@ static void* fliprsdr_transport_usb_init(FlipRSDRTransport* transport) {
     context->previous_interface = furi_hal_usb_get_config();
     context->tx_semaphore = furi_semaphore_alloc(1, 1);
     context->usb_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
+    context->rx_events = furi_event_flag_alloc();
+    context->rx_thread =
+        furi_thread_alloc_ex("FlipRSDRRx", 1024, fliprsdr_transport_usb_rx_worker, context);
     context->usb_was_locked = furi_hal_usb_is_locked();
     context->usb_connected = false;
     context->dtr_asserted = false;
+    context->rx_line_length = 0U;
 
     if(context->usb_was_locked) {
         furi_hal_usb_unlock();
@@ -81,6 +148,8 @@ static void* fliprsdr_transport_usb_init(FlipRSDRTransport* transport) {
             if(context->usb_was_locked) {
                 furi_hal_usb_lock();
             }
+            furi_thread_free(context->rx_thread);
+            furi_event_flag_free(context->rx_events);
             furi_mutex_free(context->usb_mutex);
             furi_semaphore_free(context->tx_semaphore);
             free(context);
@@ -95,6 +164,7 @@ static void* fliprsdr_transport_usb_init(FlipRSDRTransport* transport) {
         (uint32_t)furi_hal_cdc_get_port_settings(FLIPRSDR_USB_VCP_CHANNEL)->dwDTERate);
     furi_hal_cdc_set_callbacks(
         FLIPRSDR_USB_VCP_CHANNEL, &fliprsdr_transport_usb_callbacks, context);
+    furi_thread_start(context->rx_thread);
     fliprsdr_transport_usb_update_status(context);
     return context;
 }
@@ -103,12 +173,16 @@ static void fliprsdr_transport_usb_deinit(FlipRSDRTransport* transport, void* co
     UNUSED(transport);
     FlipRSDRTransportUsbContext* context = context_ptr;
     furi_hal_cdc_set_callbacks(FLIPRSDR_USB_VCP_CHANNEL, NULL, NULL);
+    furi_event_flag_set(context->rx_events, FlipRSDRUsbEventStop);
+    furi_thread_join(context->rx_thread);
     if(context->previous_interface && (context->previous_interface != &usb_cdc_dual)) {
         furi_hal_usb_set_config(context->previous_interface, NULL);
     }
     if(context->usb_was_locked) {
         furi_hal_usb_lock();
     }
+    furi_thread_free(context->rx_thread);
+    furi_event_flag_free(context->rx_events);
     furi_mutex_free(context->usb_mutex);
     furi_semaphore_free(context->tx_semaphore);
     free(context);

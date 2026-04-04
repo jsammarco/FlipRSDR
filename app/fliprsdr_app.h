@@ -38,6 +38,10 @@ typedef enum {
 } FlipRSDRCustomEvent;
 
 typedef struct {
+    char line[FLIPRSDR_COMMAND_LINE_MAX];
+} FlipRSDRCommandMessage;
+
+typedef struct {
     Gui* gui;
     ViewDispatcher* view_dispatcher;
     SceneManager* scene_manager;
@@ -50,6 +54,7 @@ typedef struct {
     FlipRSDRSettings settings;
     bool settings_dirty;
     bool transport_dirty;
+    FuriMessageQueue* command_queue;
     FlipRSDRTransport* transport;
     FlipRSDRCapture* capture;
 } FlipRSDRApp;

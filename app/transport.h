@@ -7,6 +7,7 @@ extern "C" {
 #endif
 
 typedef struct FlipRSDRTransport FlipRSDRTransport;
+typedef void (*FlipRSDRTransportCommandCallback)(const char* line, void* context);
 
 FlipRSDRTransport* fliprsdr_transport_alloc(void);
 void fliprsdr_transport_free(FlipRSDRTransport* transport);
@@ -24,6 +25,10 @@ bool fliprsdr_transport_send_direct(
     const char* data,
     size_t length);
 bool fliprsdr_transport_send_direct_cstr(FlipRSDRTransport* transport, const char* text);
+void fliprsdr_transport_set_command_callback(
+    FlipRSDRTransport* transport,
+    FlipRSDRTransportCommandCallback callback,
+    void* context);
 uint16_t fliprsdr_transport_next_sequence(FlipRSDRTransport* transport);
 void fliprsdr_transport_copy_snapshot(
     FlipRSDRTransport* transport,

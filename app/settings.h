@@ -44,6 +44,12 @@ uint16_t fliprsdr_settings_preview_bandwidth_value(uint8_t index);
 const char* fliprsdr_settings_preview_bandwidth_label(uint8_t index);
 uint8_t fliprsdr_settings_preview_bandwidth_index(uint16_t value);
 
+uint8_t fliprsdr_settings_rssi_threshold_options_count(void);
+int16_t fliprsdr_settings_rssi_threshold_value(uint8_t index);
+const char* fliprsdr_settings_rssi_threshold_label(uint8_t index);
+uint8_t fliprsdr_settings_rssi_threshold_index(int16_t value);
+bool fliprsdr_settings_rssi_threshold_enabled(const FlipRSDRSettings* settings);
+
 #ifdef __cplusplus
 }
 #endif

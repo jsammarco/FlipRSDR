@@ -1,5 +1,126 @@
 #include "fliprsdr_app.h"
 
+#include <ctype.h>
+#include <string.h>
+
+static bool fliprsdr_app_command_is_word(const char* value, const char* word) {
+    while(*value && *word) {
+        if(tolower((unsigned char)*value) != tolower((unsigned char)*word)) {
+            return false;
+        }
+        value++;
+        word++;
+    }
+    return (*value == '\0') && (*word == '\0');
+}
+
+static const char* fliprsdr_app_command_skip_delimiters(const char* text) {
+    while(*text == ' ' || *text == '\t' || *text == '=') {
+        text++;
+    }
+    return text;
+}
+
+static bool fliprsdr_app_handle_command_line(FlipRSDRApp* app, const char* line) {
+    char command[FLIPRSDR_COMMAND_LINE_MAX];
+    strncpy(command, line, sizeof(command) - 1U);
+    command[sizeof(command) - 1U] = '\0';
+
+    char* argument = command;
+    while(*argument && *argument != ' ' && *argument != '\t' && *argument != '=') {
+        argument++;
+    }
+    if(*argument) {
+        *argument++ = '\0';
+        argument = (char*)fliprsdr_app_command_skip_delimiters(argument);
+    }
+
+    if(fliprsdr_app_command_is_word(command, "start_scan")) {
+        fliprsdr_capture_start(app->capture);
+        fliprsdr_app_refresh_capture_view(app);
+        return true;
+    }
+
+    if(fliprsdr_app_command_is_word(command, "stop_scan")) {
+        fliprsdr_capture_stop(app->capture);
+        fliprsdr_app_refresh_capture_view(app);
+        return true;
+    }
+
+    if(fliprsdr_app_command_is_word(command, "set_frequency")) {
+        uint32_t frequency_hz = 0U;
+        if(!argument[0] ||
+           !fliprsdr_settings_parse_frequency_text(argument, &frequency_hz) ||
+           !fliprsdr_settings_set_frequency_hz(&app->settings, frequency_hz)) {
+            return false;
+        }
+
+        FlipRSDRCaptureSnapshot snapshot;
+        fliprsdr_capture_copy_snapshot(app->capture, &snapshot);
+        if(snapshot.running) {
+            fliprsdr_capture_stop(app->capture);
+        }
+        fliprsdr_app_apply_settings(app, false);
+        if(snapshot.running) {
+            fliprsdr_capture_start(app->capture);
+        }
+        fliprsdr_app_refresh_capture_view(app);
+        return true;
+    }
+
+    if(fliprsdr_app_command_is_word(command, "set_rssi_threshold")) {
+        if(!argument[0]) {
+            return false;
+        }
+
+        if(fliprsdr_app_command_is_word(argument, "off")) {
+            app->settings.rssi_threshold_dbm = FLIPRSDR_RSSI_THRESHOLD_OFF;
+        } else {
+            int32_t threshold = 0;
+            bool negative = false;
+            if(*argument == '-') {
+                negative = true;
+                argument++;
+            }
+            if(!isdigit((unsigned char)*argument)) {
+                return false;
+            }
+            while(isdigit((unsigned char)*argument)) {
+                threshold = (threshold * 10) + (*argument - '0');
+                argument++;
+            }
+            if(*argument != '\0') {
+                return false;
+            }
+            if(!negative) {
+                return false;
+            }
+            app->settings.rssi_threshold_dbm = (int16_t)(-threshold);
+        }
+
+        fliprsdr_settings_validate(&app->settings);
+        fliprsdr_app_apply_settings(app, false);
+        return true;
+    }
+
+    return false;
+}
+
+static void fliprsdr_app_handle_pending_commands(FlipRSDRApp* app) {
+    FlipRSDRCommandMessage message;
+    while(
+        furi_message_queue_get(app->command_queue, &message, 0U) == FuriStatusOk) {
+        fliprsdr_app_handle_command_line(app, message.line);
+    }
+}
+
+static void fliprsdr_transport_command_callback(const char* line, void* context) {
+    FlipRSDRApp* app = context;
+    FlipRSDRCommandMessage message = {0};
+    strncpy(message.line, line, sizeof(message.line) - 1U);
+    furi_message_queue_put(app->command_queue, &message, 0U);
+}
+
 static bool fliprsdr_custom_event_callback(void* context, uint32_t event) {
     FlipRSDRApp* app = context;
     return scene_manager_handle_custom_event(app->scene_manager, event);
@@ -12,6 +133,7 @@ static bool fliprsdr_back_event_callback(void* context) {
 
 static void fliprsdr_tick_event_callback(void* context) {
     FlipRSDRApp* app = context;
+    fliprsdr_app_handle_pending_commands(app);
     scene_manager_handle_tick_event(app->scene_manager);
 }
 
@@ -93,9 +215,12 @@ static FlipRSDRApp* fliprsdr_app_alloc(void) {
     app->capture = fliprsdr_capture_alloc(app->transport);
     app->settings_dirty = false;
     app->transport_dirty = false;
+    app->command_queue = furi_message_queue_alloc(8U, sizeof(FlipRSDRCommandMessage));
 
     fliprsdr_settings_load(&app->settings);
     fliprsdr_app_apply_settings(app, true);
+    fliprsdr_transport_set_command_callback(
+        app->transport, fliprsdr_transport_command_callback, app);
 
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
     view_dispatcher_set_custom_event_callback(
@@ -154,8 +279,10 @@ static void fliprsdr_app_free(FlipRSDRApp* app) {
     submenu_free(app->submenu);
     scene_manager_free(app->scene_manager);
     view_dispatcher_free(app->view_dispatcher);
+    fliprsdr_transport_set_command_callback(app->transport, NULL, NULL);
     fliprsdr_capture_free(app->capture);
     fliprsdr_transport_free(app->transport);
+    furi_message_queue_free(app->command_queue);
 
     furi_record_close(RECORD_GUI);
     free(app);

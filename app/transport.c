@@ -17,6 +17,8 @@ struct FlipRSDRTransport {
     FuriThread* thread;
     FuriMutex* mutex;
     uint16_t next_sequence;
+    FlipRSDRTransportCommandCallback command_callback;
+    void* command_context;
     FlipRSDRTransportSnapshot snapshot;
 };
 
@@ -86,6 +88,8 @@ FlipRSDRTransport* fliprsdr_transport_alloc(void) {
         furi_thread_alloc_ex("FlipRSDRTx", 1536, fliprsdr_transport_tx_worker, transport);
     transport->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     transport->next_sequence = 0U;
+    transport->command_callback = NULL;
+    transport->command_context = NULL;
     transport->snapshot = (FlipRSDRTransportSnapshot){
         .kind = FlipRSDRTransportKindUsb,
         .state = FlipRSDRTransportStateDisconnected,
@@ -200,6 +204,34 @@ bool fliprsdr_transport_send_direct(
 bool fliprsdr_transport_send_direct_cstr(FlipRSDRTransport* transport, const char* text) {
     furi_assert(text);
     return fliprsdr_transport_send_direct(transport, text, strlen(text));
+}
+
+void fliprsdr_transport_set_command_callback(
+    FlipRSDRTransport* transport,
+    FlipRSDRTransportCommandCallback callback,
+    void* context) {
+    furi_assert(transport);
+
+    furi_check(furi_mutex_acquire(transport->mutex, FuriWaitForever) == FuriStatusOk);
+    transport->command_callback = callback;
+    transport->command_context = context;
+    furi_check(furi_mutex_release(transport->mutex) == FuriStatusOk);
+}
+
+void fliprsdr_transport_receive_line(FlipRSDRTransport* transport, const char* line) {
+    furi_assert(transport);
+    furi_assert(line);
+
+    FlipRSDRTransportCommandCallback callback = NULL;
+    void* context = NULL;
+    furi_check(furi_mutex_acquire(transport->mutex, FuriWaitForever) == FuriStatusOk);
+    callback = transport->command_callback;
+    context = transport->command_context;
+    furi_check(furi_mutex_release(transport->mutex) == FuriStatusOk);
+
+    if(callback) {
+        callback(line, context);
+    }
 }
 
 uint16_t fliprsdr_transport_next_sequence(FlipRSDRTransport* transport) {

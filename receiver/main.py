@@ -67,6 +67,8 @@ WAVEFORM_UPDATE_INTERVAL_S = 0.05
 WATERFALL_REFRESH_INTERVAL_MS = 250
 WATERFALL_X_TICKS_US = [16, 32, 64, 128, 256, 512, 1000, 2000, 4000, 8000, 16000, 32000, 65536]
 PROTOCOL_OPTIONS = [PROTOCOL_FORMAT_FLIPRSDR, PROTOCOL_FORMAT_JSON]
+REMOTE_FREQUENCY_OPTIONS = ["300.000", "315.000", "390.000", "433.920", "868.350", "915.000"]
+REMOTE_RSSI_THRESHOLD_OPTIONS = ["Off", "-110", "-100", "-90", "-80", "-70", "-60", "-50"]
 
 
 @dataclass
@@ -147,9 +149,44 @@ class SerialReceiverThread(QThread):
         self._stop_event = threading.Event()
         self._bursts: dict[tuple[int, int], BurstData] = {}
         self._binary_decoder = BinaryStreamDecoder()
+        self._command_lock = threading.Lock()
+        self._pending_commands: deque[str] = deque()
+        self._connected = False
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def send_command(self, command: str) -> bool:
+        command = command.strip()
+        if not command:
+            return False
+        with self._command_lock:
+            if not self._connected:
+                return False
+            self._pending_commands.append(command)
+        return True
+
+    def _flush_pending_commands(self, serial_port: serial.Serial) -> bool:
+        while True:
+            with self._command_lock:
+                if not self._pending_commands:
+                    return True
+                command = self._pending_commands.popleft()
+
+            payload = f"{command}\n".encode("utf-8")
+            try:
+                serial_port.write(payload)
+            except serial.SerialTimeoutException as exc:
+                self.parse_warning.emit(f"Serial write timeout: {exc}")
+                with self._command_lock:
+                    self._pending_commands.appendleft(command)
+                return True
+            except serial.SerialException as exc:
+                self.status_changed.emit(f"Serial write failed: {exc}")
+                with self._command_lock:
+                    self._connected = False
+                return False
+            self.raw_line_received.emit(f"[cmd] {command}")
 
     def run(self) -> None:
         try:
@@ -157,7 +194,7 @@ class SerialReceiverThread(QThread):
                 self._port_name,
                 self._baud_rate,
                 timeout=0.2,
-                write_timeout=0.2,
+                write_timeout=1.0,
             ) as serial_port:
                 try:
                     serial_port.dtr = True
@@ -166,9 +203,14 @@ class SerialReceiverThread(QThread):
                     pass
 
                 serial_port.reset_input_buffer()
+                with self._command_lock:
+                    self._connected = True
                 self.status_changed.emit(f"Connected to {self._port_name}")
 
                 while not self._stop_event.is_set():
+                    if not self._flush_pending_commands(serial_port):
+                        break
+
                     try:
                         if self._protocol_format == PROTOCOL_FORMAT_FLIPRSDR:
                             raw = serial_port.read(max(1, serial_port.in_waiting or 0))
@@ -209,6 +251,8 @@ class SerialReceiverThread(QThread):
         except serial.SerialException as exc:
             self.status_changed.emit(f"Unable to open {self._port_name}: {exc}")
         finally:
+            with self._command_lock:
+                self._connected = False
             self.status_changed.emit("Disconnected")
 
     @staticmethod
@@ -356,6 +400,18 @@ class ReceiverMainWindow(QMainWindow):
         self.record_button.setCheckable(True)
         self.choose_recording_button = QPushButton("Recording Folder")
         self.clear_waterfall_button = QPushButton("Clear Waterfall")
+        self.start_scan_button = QPushButton("Start Scan")
+        self.stop_scan_button = QPushButton("Stop Scan")
+        self.remote_frequency_combo = QComboBox()
+        self.remote_frequency_combo.setEditable(True)
+        self.remote_frequency_combo.addItems(REMOTE_FREQUENCY_OPTIONS)
+        self.send_frequency_button = QPushButton("Send Frequency")
+        self.remote_rssi_threshold_combo = QComboBox()
+        self.remote_rssi_threshold_combo.setEditable(True)
+        self.remote_rssi_threshold_combo.addItems(REMOTE_RSSI_THRESHOLD_OPTIONS)
+        self.send_rssi_threshold_button = QPushButton("Send RSSI")
+        self.command_status_value = QLabel("Remote control idle")
+        self.command_status_value.setStyleSheet("color: #9fb3c8;")
 
         self.refresh_ports_button.clicked.connect(self._refresh_ports)
         self.connect_button.clicked.connect(self._toggle_connection)
@@ -367,6 +423,14 @@ class ReceiverMainWindow(QMainWindow):
         self.port_combo.currentTextChanged.connect(self._on_port_selection_changed)
         self.baud_combo.currentTextChanged.connect(self._on_baud_selection_changed)
         self.protocol_combo.currentTextChanged.connect(self._on_protocol_selection_changed)
+        self.start_scan_button.clicked.connect(lambda: self._send_receiver_command("start_scan"))
+        self.stop_scan_button.clicked.connect(lambda: self._send_receiver_command("stop_scan"))
+        self.send_frequency_button.clicked.connect(self._send_frequency_command)
+        self.send_rssi_threshold_button.clicked.connect(self._send_rssi_threshold_command)
+        self.remote_frequency_combo.currentTextChanged.connect(self._on_remote_frequency_changed)
+        self.remote_rssi_threshold_combo.currentTextChanged.connect(
+            self._on_remote_rssi_threshold_changed
+        )
 
         control_row.addWidget(QLabel("Port"))
         control_row.addWidget(self.port_combo)
@@ -391,6 +455,23 @@ class ReceiverMainWindow(QMainWindow):
         control_row.addStretch(1)
 
         main_layout.addLayout(control_row)
+
+        command_row = QHBoxLayout()
+        command_row.setSpacing(8)
+        command_row.addWidget(QLabel("Remote"))
+        command_row.addWidget(self.start_scan_button)
+        command_row.addWidget(self.stop_scan_button)
+        command_row.addSpacing(10)
+        command_row.addWidget(QLabel("Frequency"))
+        command_row.addWidget(self.remote_frequency_combo)
+        command_row.addWidget(self.send_frequency_button)
+        command_row.addSpacing(10)
+        command_row.addWidget(QLabel("RSSI Min"))
+        command_row.addWidget(self.remote_rssi_threshold_combo)
+        command_row.addWidget(self.send_rssi_threshold_button)
+        command_row.addStretch(1)
+        command_row.addWidget(self.command_status_value)
+        main_layout.addLayout(command_row)
 
         stats_layout = QFormLayout()
         stats_layout.setHorizontalSpacing(18)
@@ -577,6 +658,7 @@ class ReceiverMainWindow(QMainWindow):
         self._receiver_thread = None
         self._stop_audio_playback()
         self._update_connection_ui(False)
+        self._set_command_status("Remote control disconnected", ok=False)
 
     def _update_connection_ui(self, connected: bool) -> None:
         self.connect_button.setText("Disconnect" if connected else "Connect")
@@ -584,6 +666,12 @@ class ReceiverMainWindow(QMainWindow):
         self.baud_combo.setEnabled(not connected)
         self.protocol_combo.setEnabled(not connected)
         self.refresh_ports_button.setEnabled(not connected)
+        self.start_scan_button.setEnabled(connected)
+        self.stop_scan_button.setEnabled(connected)
+        self.remote_frequency_combo.setEnabled(connected)
+        self.send_frequency_button.setEnabled(connected)
+        self.remote_rssi_threshold_combo.setEnabled(connected)
+        self.send_rssi_threshold_button.setEnabled(connected)
 
     def _on_port_selection_changed(self, port_name: str) -> None:
         if port_name.strip():
@@ -596,6 +684,14 @@ class ReceiverMainWindow(QMainWindow):
     def _on_protocol_selection_changed(self, protocol_format: str) -> None:
         if protocol_format.strip():
             self._settings.setValue("serial/protocol", protocol_format.strip())
+
+    def _on_remote_frequency_changed(self, text: str) -> None:
+        if text.strip():
+            self._settings.setValue("remote/frequency", text.strip())
+
+    def _on_remote_rssi_threshold_changed(self, text: str) -> None:
+        if text.strip():
+            self._settings.setValue("remote/rssi_threshold", text.strip())
 
     def _on_audio_toggled(self, enabled: bool) -> None:
         if not enabled:
@@ -618,6 +714,44 @@ class ReceiverMainWindow(QMainWindow):
         else:
             self.connection_value.setStyleSheet("color: #ffd166;")
         self.statusBar().showMessage(text, 3000)
+
+    def _set_command_status(self, text: str, *, ok: bool | None = None) -> None:
+        if ok is True:
+            color = "#7CFC98"
+        elif ok is False:
+            color = "#ff9c74"
+        else:
+            color = "#9fb3c8"
+        self.command_status_value.setStyleSheet(f"color: {color};")
+        self.command_status_value.setText(text)
+
+    def _send_receiver_command(self, command: str) -> bool:
+        if not self._receiver_thread or not self._receiver_thread.isRunning():
+            QMessageBox.warning(self, APP_NAME, "Connect to the Flipper before sending commands.")
+            self._set_command_status("Remote control disconnected", ok=False)
+            return False
+
+        sent = self._receiver_thread.send_command(command)
+        if sent:
+            self._append_log_line(f"[cmd] {command}")
+            self._set_command_status(f"Sent: {command}", ok=True)
+        else:
+            self._set_command_status(f"Failed: {command}", ok=False)
+        return sent
+
+    def _send_frequency_command(self) -> None:
+        frequency_text = self.remote_frequency_combo.currentText().strip()
+        if not frequency_text:
+            QMessageBox.warning(self, APP_NAME, "Enter a frequency first.")
+            return
+        self._send_receiver_command(f"set_frequency {frequency_text}")
+
+    def _send_rssi_threshold_command(self) -> None:
+        threshold_text = self.remote_rssi_threshold_combo.currentText().strip()
+        if not threshold_text:
+            QMessageBox.warning(self, APP_NAME, "Select an RSSI threshold first.")
+            return
+        self._send_receiver_command(f"set_rssi_threshold {threshold_text}")
 
     def _append_log_line(self, text: str) -> None:
         self.log_view.appendPlainText(text)
@@ -910,6 +1044,18 @@ class ReceiverMainWindow(QMainWindow):
         saved_recording_path = str(self._settings.value("recording/path", "", type=str)).strip()
         if saved_recording_path:
             self._recording_path = Path(saved_recording_path)
+
+        saved_remote_frequency = str(
+            self._settings.value("remote/frequency", "433.920", type=str)
+        ).strip()
+        if saved_remote_frequency:
+            self.remote_frequency_combo.setCurrentText(saved_remote_frequency)
+
+        saved_remote_rssi_threshold = str(
+            self._settings.value("remote/rssi_threshold", "Off", type=str)
+        ).strip()
+        if saved_remote_rssi_threshold:
+            self.remote_rssi_threshold_combo.setCurrentText(saved_remote_rssi_threshold)
 
     def _save_ui_settings(self) -> None:
         self._settings.setValue("serial/last_port", self.port_combo.currentText().strip())

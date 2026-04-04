@@ -45,6 +45,24 @@ typedef struct {
     FlipRSDRSettingsV4 settings;
 } FlipRSDRSettingsStoreV4;
 
+typedef struct {
+    uint32_t frequency_hz;
+    uint8_t transport_kind;
+    uint8_t protocol_format;
+    uint8_t stream_mode;
+    bool auto_send_after_burst;
+    bool include_rssi;
+    bool include_timestamp;
+    uint16_t max_pulse_count;
+    uint16_t capture_timeout_ms;
+    uint16_t gap_threshold_ms;
+    uint16_t preview_bandwidth_khz;
+} FlipRSDRSettingsV5;
+
+typedef struct {
+    FlipRSDRSettingsV5 settings;
+} FlipRSDRSettingsStoreV5;
+
 static const uint32_t fliprsdr_frequency_values[FlipRSDRFrequencyPresetCount] = {
     300000000UL,
     315000000UL,
@@ -110,6 +128,27 @@ static const char* fliprsdr_preview_bandwidth_labels[] = {
     "400 kHz",
 };
 
+static const int16_t fliprsdr_rssi_threshold_options[] = {
+    FLIPRSDR_RSSI_THRESHOLD_OFF,
+    -110,
+    -100,
+    -90,
+    -80,
+    -70,
+    -60,
+    -50,
+};
+static const char* fliprsdr_rssi_threshold_labels[] = {
+    "Off",
+    "-110 dBm",
+    "-100 dBm",
+    "-90 dBm",
+    "-80 dBm",
+    "-70 dBm",
+    "-60 dBm",
+    "-50 dBm",
+};
+
 static bool fliprsdr_settings_load_v3(FlipRSDRSettings* settings) {
     FlipRSDRSettingsStoreV3 store = {0};
 
@@ -152,6 +191,30 @@ static bool fliprsdr_settings_load_v4(FlipRSDRSettings* settings) {
     settings->max_pulse_count = store.settings.max_pulse_count;
     settings->capture_timeout_ms = store.settings.capture_timeout_ms;
     settings->gap_threshold_ms = store.settings.gap_threshold_ms;
+    settings->rssi_threshold_dbm = FLIPRSDR_RSSI_THRESHOLD_OFF;
+    settings->preview_bandwidth_khz = store.settings.preview_bandwidth_khz;
+    return true;
+}
+
+static bool fliprsdr_settings_load_v5(FlipRSDRSettings* settings) {
+    FlipRSDRSettingsStoreV5 store = {0};
+
+    if(!saved_struct_load(
+           FLIPRSDR_SETTINGS_PATH, &store, sizeof(store), FLIPRSDR_SETTINGS_MAGIC, 5U)) {
+        return false;
+    }
+
+    settings->frequency_hz = store.settings.frequency_hz;
+    settings->transport_kind = store.settings.transport_kind;
+    settings->protocol_format = store.settings.protocol_format;
+    settings->stream_mode = store.settings.stream_mode;
+    settings->auto_send_after_burst = store.settings.auto_send_after_burst;
+    settings->include_rssi = store.settings.include_rssi;
+    settings->include_timestamp = store.settings.include_timestamp;
+    settings->max_pulse_count = store.settings.max_pulse_count;
+    settings->capture_timeout_ms = store.settings.capture_timeout_ms;
+    settings->gap_threshold_ms = store.settings.gap_threshold_ms;
+    settings->rssi_threshold_dbm = FLIPRSDR_RSSI_THRESHOLD_OFF;
     settings->preview_bandwidth_khz = store.settings.preview_bandwidth_khz;
     return true;
 }
@@ -168,6 +231,7 @@ void fliprsdr_settings_load_defaults(FlipRSDRSettings* settings) {
     settings->max_pulse_count = 2048;
     settings->capture_timeout_ms = 250;
     settings->gap_threshold_ms = 20;
+    settings->rssi_threshold_dbm = FLIPRSDR_RSSI_THRESHOLD_OFF;
     settings->preview_bandwidth_khz = 100;
 }
 
@@ -196,6 +260,9 @@ void fliprsdr_settings_validate(FlipRSDRSettings* settings) {
     settings->gap_threshold_ms =
         fliprsdr_settings_gap_threshold_value(
             fliprsdr_settings_gap_threshold_index(settings->gap_threshold_ms));
+    settings->rssi_threshold_dbm =
+        fliprsdr_settings_rssi_threshold_value(
+            fliprsdr_settings_rssi_threshold_index(settings->rssi_threshold_dbm));
     settings->preview_bandwidth_khz =
         fliprsdr_settings_preview_bandwidth_value(
             fliprsdr_settings_preview_bandwidth_index(settings->preview_bandwidth_khz));
@@ -239,6 +306,12 @@ bool fliprsdr_settings_load(FlipRSDRSettings* settings) {
 
     if(version == 4U && payload_size == sizeof(FlipRSDRSettingsStoreV4) &&
        fliprsdr_settings_load_v4(settings)) {
+        fliprsdr_settings_validate(settings);
+        return true;
+    }
+
+    if(version == 5U && payload_size == sizeof(FlipRSDRSettingsStoreV5) &&
+       fliprsdr_settings_load_v5(settings)) {
         fliprsdr_settings_validate(settings);
         return true;
     }
@@ -465,4 +538,40 @@ uint8_t fliprsdr_settings_preview_bandwidth_index(uint16_t value) {
         if(fliprsdr_preview_bandwidth_options[i] < value) best_index = i;
     }
     return best_index;
+}
+
+uint8_t fliprsdr_settings_rssi_threshold_options_count(void) {
+    return COUNT_OF(fliprsdr_rssi_threshold_options);
+}
+
+int16_t fliprsdr_settings_rssi_threshold_value(uint8_t index) {
+    if(index >= COUNT_OF(fliprsdr_rssi_threshold_options)) {
+        index = 0U;
+    }
+    return fliprsdr_rssi_threshold_options[index];
+}
+
+const char* fliprsdr_settings_rssi_threshold_label(uint8_t index) {
+    if(index >= COUNT_OF(fliprsdr_rssi_threshold_labels)) return "?";
+    return fliprsdr_rssi_threshold_labels[index];
+}
+
+uint8_t fliprsdr_settings_rssi_threshold_index(int16_t value) {
+    if(value == FLIPRSDR_RSSI_THRESHOLD_OFF) {
+        return 0U;
+    }
+
+    uint8_t best_index = 1U;
+    for(uint8_t i = 1U; i < COUNT_OF(fliprsdr_rssi_threshold_options); i++) {
+        if(fliprsdr_rssi_threshold_options[i] == value) return i;
+        if(fliprsdr_rssi_threshold_options[i] <= value) {
+            best_index = i;
+        }
+    }
+    return best_index;
+}
+
+bool fliprsdr_settings_rssi_threshold_enabled(const FlipRSDRSettings* settings) {
+    furi_assert(settings);
+    return settings->rssi_threshold_dbm != FLIPRSDR_RSSI_THRESHOLD_OFF;
 }

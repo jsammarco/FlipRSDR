@@ -11,6 +11,8 @@ typedef struct {
     FuriEventFlag* events;
     bool connected;
     bool advertising;
+    char rx_line[FLIPRSDR_COMMAND_LINE_MAX];
+    uint16_t rx_line_length;
 } FlipRSDRTransportBleContext;
 
 enum {
@@ -30,6 +32,27 @@ static void fliprsdr_transport_ble_update_status(FlipRSDRTransportBleContext* co
         context->transport, state, context->connected, context->advertising);
 }
 
+static void fliprsdr_transport_ble_process_rx_bytes(
+    FlipRSDRTransportBleContext* context,
+    const uint8_t* data,
+    size_t length) {
+    for(size_t i = 0; i < length; i++) {
+        const char ch = (char)data[i];
+        if((ch == '\r') || (ch == '\n')) {
+            if(context->rx_line_length > 0U) {
+                context->rx_line[context->rx_line_length] = '\0';
+                fliprsdr_transport_receive_line(context->transport, context->rx_line);
+                context->rx_line_length = 0U;
+            }
+            continue;
+        }
+
+        if(context->rx_line_length < (FLIPRSDR_COMMAND_LINE_MAX - 1U)) {
+            context->rx_line[context->rx_line_length++] = ch;
+        }
+    }
+}
+
 static void fliprsdr_transport_ble_status_changed(BtStatus status, void* context_ptr) {
     FlipRSDRTransportBleContext* context = context_ptr;
     context->connected = (status == BtStatusConnected);
@@ -42,7 +65,10 @@ static void fliprsdr_transport_ble_status_changed(BtStatus status, void* context
 
 static uint16_t fliprsdr_transport_ble_serial_event(SerialServiceEvent event, void* context_ptr) {
     FlipRSDRTransportBleContext* context = context_ptr;
-    if(event.event == SerialServiceEventTypeDataSent) {
+    if(event.event == SerialServiceEventTypeDataReceived) {
+        fliprsdr_transport_ble_process_rx_bytes(context, event.data.buffer, event.data.size);
+        return BLE_SVC_SERIAL_DATA_LEN_MAX;
+    } else if(event.event == SerialServiceEventTypeDataSent) {
         furi_event_flag_set(context->events, FlipRSDRBleEventTxDone);
     }
     return 0U;
@@ -59,6 +85,7 @@ static void* fliprsdr_transport_ble_init(FlipRSDRTransport* transport) {
     context->events = furi_event_flag_alloc();
     context->connected = false;
     context->advertising = false;
+    context->rx_line_length = 0U;
 
     context->profile = bt_profile_start(context->bt, ble_profile_serial, NULL);
     if(!context->profile) {

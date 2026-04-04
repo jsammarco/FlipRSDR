@@ -59,6 +59,14 @@ static bool fliprsdr_capture_store_local_enabled(const FlipRSDRCapture* capture)
            (capture->settings.stream_mode == FlipRSDRStreamModeLiveBuffered);
 }
 
+static bool fliprsdr_capture_rssi_above_threshold(const FlipRSDRCapture* capture, float rssi) {
+    if(!fliprsdr_settings_rssi_threshold_enabled(&capture->settings)) {
+        return true;
+    }
+
+    return rssi >= (float)capture->settings.rssi_threshold_dbm;
+}
+
 static uint32_t fliprsdr_capture_frequency_hz(const FlipRSDRCapture* capture) {
     return fliprsdr_settings_frequency_hz(&capture->settings);
 }
@@ -134,12 +142,16 @@ static void fliprsdr_capture_process_timing(
     FlipRSDRCapture* capture,
     bool level,
     uint32_t duration_us) {
+    capture->last_event_tick = furi_get_tick();
+    capture->last_rssi = furi_hal_subghz_get_rssi();
+
     if(!capture->in_burst) {
+        if(!fliprsdr_capture_rssi_above_threshold(capture, capture->last_rssi)) {
+            return;
+        }
         fliprsdr_capture_begin_burst(capture, level);
     }
 
-    capture->last_event_tick = furi_get_tick();
-    capture->last_rssi = furi_hal_subghz_get_rssi();
     fliprsdr_burst_buffer_append(
         &capture->working,
         duration_us,

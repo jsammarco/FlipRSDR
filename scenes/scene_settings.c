@@ -12,8 +12,8 @@ enum {
     FlipRSDRSettingsItemMaxPulses,
     FlipRSDRSettingsItemTimeout,
     FlipRSDRSettingsItemGapThreshold,
+    FlipRSDRSettingsItemRssiThreshold,
     FlipRSDRSettingsItemPreviewBand,
-    FlipRSDRSettingsItemDebugSend,
 };
 
 static void fliprsdr_scene_settings_frequency_preset_changed(VariableItem* item) {
@@ -111,14 +111,20 @@ static void fliprsdr_scene_settings_preview_bandwidth_changed(VariableItem* item
     app->settings_dirty = true;
 }
 
+static void fliprsdr_scene_settings_rssi_threshold_changed(VariableItem* item) {
+    FlipRSDRApp* app = variable_item_get_context(item);
+    const uint8_t index = variable_item_get_current_value_index(item);
+    app->settings.rssi_threshold_dbm = fliprsdr_settings_rssi_threshold_value(index);
+    variable_item_set_current_value_text(item, fliprsdr_settings_rssi_threshold_label(index));
+    app->settings_dirty = true;
+}
+
 static void fliprsdr_scene_settings_enter_callback(void* context, uint32_t index) {
     FlipRSDRApp* app = context;
     scene_manager_set_scene_state(app->scene_manager, FlipRSDRSceneSettings, index);
 
     if(index == FlipRSDRSettingsItemFrequency) {
         scene_manager_next_scene(app->scene_manager, FlipRSDRSceneFrequencyInput);
-    } else if(index == FlipRSDRSettingsItemDebugSend) {
-        fliprsdr_capture_send_debug_burst(app->capture);
     }
 }
 
@@ -258,6 +264,19 @@ void fliprsdr_scene_settings_on_enter(void* context) {
 
     item = variable_item_list_add(
         app->variable_item_list,
+        "RSSI min",
+        fliprsdr_settings_rssi_threshold_options_count(),
+        fliprsdr_scene_settings_rssi_threshold_changed,
+        app);
+    variable_item_set_current_value_index(
+        item, fliprsdr_settings_rssi_threshold_index(app->settings.rssi_threshold_dbm));
+    variable_item_set_current_value_text(
+        item,
+        fliprsdr_settings_rssi_threshold_label(
+            fliprsdr_settings_rssi_threshold_index(app->settings.rssi_threshold_dbm)));
+
+    item = variable_item_list_add(
+        app->variable_item_list,
         "Band span",
         fliprsdr_settings_preview_bandwidth_options_count(),
         fliprsdr_scene_settings_preview_bandwidth_changed,
@@ -269,10 +288,6 @@ void fliprsdr_scene_settings_on_enter(void* context) {
         item,
         fliprsdr_settings_preview_bandwidth_label(
             fliprsdr_settings_preview_bandwidth_index(app->settings.preview_bandwidth_khz)));
-
-    item = variable_item_list_add(app->variable_item_list, "Debug send", 1, NULL, app);
-    variable_item_set_current_value_index(item, 0U);
-    variable_item_set_current_value_text(item, "Run");
 
     variable_item_list_set_selected_item(
         app->variable_item_list,

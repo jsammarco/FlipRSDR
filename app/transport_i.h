@@ -20,3 +20,4 @@ void fliprsdr_transport_set_state(
     bool advertising);
 void fliprsdr_transport_set_last_send_ok(FlipRSDRTransport* transport, bool ok);
 void fliprsdr_transport_set_usb_baud_rate(FlipRSDRTransport* transport, uint32_t baud_rate);
+void fliprsdr_transport_receive_line(FlipRSDRTransport* transport, const char* line);

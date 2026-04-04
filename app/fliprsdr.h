@@ -2,6 +2,7 @@
 
 #include <furi.h>
 #include <stdbool.h>
+#include <limits.h>
 #include <stdint.h>
 #include <storage/storage.h>
 
@@ -11,7 +12,7 @@ extern "C" {
 
 #define FLIPRSDR_SETTINGS_PATH                  APP_DATA_PATH("fliprsdr.settings")
 #define FLIPRSDR_SETTINGS_MAGIC                 0x52U
-#define FLIPRSDR_SETTINGS_VERSION               5U
+#define FLIPRSDR_SETTINGS_VERSION               6U
 #define FLIPRSDR_BURST_TIMINGS_CAPACITY         4096U
 #define FLIPRSDR_CAPTURE_STREAM_DEPTH           1024U
 #define FLIPRSDR_PROTOCOL_LINE_MAX              256U
@@ -20,10 +21,12 @@ extern "C" {
 #define FLIPRSDR_PROTOCOL_CHUNK_TIMINGS         16U
 #define FLIPRSDR_TRANSPORT_QUEUE_DEPTH          16U
 #define FLIPRSDR_TRANSPORT_MESSAGE_MAX          512U
+#define FLIPRSDR_COMMAND_LINE_MAX               96U
 #define FLIPRSDR_PREVIEW_GRAPH_POINTS           48U
 #define FLIPRSDR_USB_VCP_CHANNEL                1U
 #define FLIPRSDR_USB_SEND_TIMEOUT_MS            200U
 #define FLIPRSDR_BLE_SEND_TIMEOUT_MS            750U
+#define FLIPRSDR_RSSI_THRESHOLD_OFF             INT16_MAX
 typedef enum {
     FlipRSDRFrequencyPreset300,
     FlipRSDRFrequencyPreset315,
@@ -79,6 +82,7 @@ typedef struct {
     uint16_t max_pulse_count;
     uint16_t capture_timeout_ms;
     uint16_t gap_threshold_ms;
+    int16_t rssi_threshold_dbm;
     uint16_t preview_bandwidth_khz;
 } FlipRSDRSettings;
 
