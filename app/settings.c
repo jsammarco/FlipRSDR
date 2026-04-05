@@ -63,6 +63,45 @@ typedef struct {
     FlipRSDRSettingsV5 settings;
 } FlipRSDRSettingsStoreV5;
 
+typedef struct {
+    uint32_t frequency_hz;
+    uint8_t transport_kind;
+    uint8_t protocol_format;
+    uint8_t stream_mode;
+    bool auto_send_after_burst;
+    bool include_rssi;
+    bool include_timestamp;
+    uint16_t max_pulse_count;
+    uint16_t capture_timeout_ms;
+    uint16_t gap_threshold_ms;
+    int16_t rssi_threshold_dbm;
+    uint16_t preview_bandwidth_khz;
+} FlipRSDRSettingsV6;
+
+typedef struct {
+    FlipRSDRSettingsV6 settings;
+} FlipRSDRSettingsStoreV6;
+
+typedef struct {
+    uint32_t frequency_hz;
+    uint8_t transport_kind;
+    uint8_t protocol_format;
+    uint8_t stream_mode;
+    bool auto_send_after_burst;
+    bool include_rssi;
+    bool include_timestamp;
+    bool preview_audio;
+    uint16_t max_pulse_count;
+    uint16_t capture_timeout_ms;
+    uint16_t gap_threshold_ms;
+    int16_t rssi_threshold_dbm;
+    uint16_t preview_bandwidth_khz;
+} FlipRSDRSettingsV7;
+
+typedef struct {
+    FlipRSDRSettingsV7 settings;
+} FlipRSDRSettingsStoreV7;
+
 static const uint32_t fliprsdr_frequency_values[FlipRSDRFrequencyPresetCount] = {
     300000000UL,
     315000000UL,
@@ -95,6 +134,11 @@ static const char* fliprsdr_stream_mode_labels[FlipRSDRStreamModeCount] = {
     "Live stream",
     "Buffered",
     "Live + buffer",
+};
+
+static const char* fliprsdr_radio_module_labels[] = {
+    "Internal",
+    "External",
 };
 
 static const uint16_t fliprsdr_max_pulse_options[] = {256, 512, 1024, 2048, 4096};
@@ -219,6 +263,55 @@ static bool fliprsdr_settings_load_v5(FlipRSDRSettings* settings) {
     return true;
 }
 
+static bool fliprsdr_settings_load_v6(FlipRSDRSettings* settings) {
+    FlipRSDRSettingsStoreV6 store = {0};
+
+    if(!saved_struct_load(
+           FLIPRSDR_SETTINGS_PATH, &store, sizeof(store), FLIPRSDR_SETTINGS_MAGIC, 6U)) {
+        return false;
+    }
+
+    settings->frequency_hz = store.settings.frequency_hz;
+    settings->transport_kind = store.settings.transport_kind;
+    settings->protocol_format = store.settings.protocol_format;
+    settings->stream_mode = store.settings.stream_mode;
+    settings->auto_send_after_burst = store.settings.auto_send_after_burst;
+    settings->include_rssi = store.settings.include_rssi;
+    settings->include_timestamp = store.settings.include_timestamp;
+    settings->preview_audio = false;
+    settings->max_pulse_count = store.settings.max_pulse_count;
+    settings->capture_timeout_ms = store.settings.capture_timeout_ms;
+    settings->gap_threshold_ms = store.settings.gap_threshold_ms;
+    settings->rssi_threshold_dbm = store.settings.rssi_threshold_dbm;
+    settings->preview_bandwidth_khz = store.settings.preview_bandwidth_khz;
+    return true;
+}
+
+static bool fliprsdr_settings_load_v7(FlipRSDRSettings* settings) {
+    FlipRSDRSettingsStoreV7 store = {0};
+
+    if(!saved_struct_load(
+           FLIPRSDR_SETTINGS_PATH, &store, sizeof(store), FLIPRSDR_SETTINGS_MAGIC, 7U)) {
+        return false;
+    }
+
+    settings->frequency_hz = store.settings.frequency_hz;
+    settings->transport_kind = store.settings.transport_kind;
+    settings->protocol_format = store.settings.protocol_format;
+    settings->stream_mode = store.settings.stream_mode;
+    settings->auto_send_after_burst = store.settings.auto_send_after_burst;
+    settings->include_rssi = store.settings.include_rssi;
+    settings->include_timestamp = store.settings.include_timestamp;
+    settings->preview_audio = store.settings.preview_audio;
+    settings->external_radio_module = false;
+    settings->max_pulse_count = store.settings.max_pulse_count;
+    settings->capture_timeout_ms = store.settings.capture_timeout_ms;
+    settings->gap_threshold_ms = store.settings.gap_threshold_ms;
+    settings->rssi_threshold_dbm = store.settings.rssi_threshold_dbm;
+    settings->preview_bandwidth_khz = store.settings.preview_bandwidth_khz;
+    return true;
+}
+
 void fliprsdr_settings_load_defaults(FlipRSDRSettings* settings) {
     furi_assert(settings);
     settings->frequency_hz = 433920000UL;
@@ -228,6 +321,8 @@ void fliprsdr_settings_load_defaults(FlipRSDRSettings* settings) {
     settings->auto_send_after_burst = false;
     settings->include_rssi = true;
     settings->include_timestamp = true;
+    settings->preview_audio = false;
+    settings->external_radio_module = false;
     settings->max_pulse_count = 2048;
     settings->capture_timeout_ms = 250;
     settings->gap_threshold_ms = 20;
@@ -312,6 +407,18 @@ bool fliprsdr_settings_load(FlipRSDRSettings* settings) {
 
     if(version == 5U && payload_size == sizeof(FlipRSDRSettingsStoreV5) &&
        fliprsdr_settings_load_v5(settings)) {
+        fliprsdr_settings_validate(settings);
+        return true;
+    }
+
+    if(version == 6U && payload_size == sizeof(FlipRSDRSettingsStoreV6) &&
+       fliprsdr_settings_load_v6(settings)) {
+        fliprsdr_settings_validate(settings);
+        return true;
+    }
+
+    if(version == 7U && payload_size == sizeof(FlipRSDRSettingsStoreV7) &&
+       fliprsdr_settings_load_v7(settings)) {
         fliprsdr_settings_validate(settings);
         return true;
     }
@@ -438,6 +545,10 @@ const char* fliprsdr_settings_stream_mode_label(uint8_t mode_index) {
 
 const char* fliprsdr_settings_bool_label(bool value) {
     return value ? "On" : "Off";
+}
+
+const char* fliprsdr_settings_radio_module_label(bool external_module) {
+    return fliprsdr_radio_module_labels[external_module ? 1U : 0U];
 }
 
 uint8_t fliprsdr_settings_max_pulse_count_options_count(void) {

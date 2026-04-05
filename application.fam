@@ -3,6 +3,7 @@ App(
     name="FlipRSDR",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="fliprsdr_app",
+    requires=["subghz"],
     fap_category="Tools",
     fap_version="0.1",
     fap_description="Capture raw Sub-GHz pulse timing bursts and stream them to a PC.",

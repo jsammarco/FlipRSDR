@@ -23,6 +23,7 @@ const char* fliprsdr_settings_transport_label(uint8_t transport_index);
 const char* fliprsdr_settings_protocol_label(uint8_t protocol_index);
 const char* fliprsdr_settings_stream_mode_label(uint8_t mode_index);
 const char* fliprsdr_settings_bool_label(bool value);
+const char* fliprsdr_settings_radio_module_label(bool external_module);
 
 uint8_t fliprsdr_settings_max_pulse_count_options_count(void);
 uint16_t fliprsdr_settings_max_pulse_count_value(uint8_t index);

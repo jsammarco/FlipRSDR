@@ -179,6 +179,18 @@ static void fliprsdr_frequency_editor_action_callback(
     }
 }
 
+static void fliprsdr_preview_view_action_callback(
+    FlipRSDRPreviewViewAction action,
+    uint32_t frequency_hz,
+    void* context) {
+    FlipRSDRApp* app = context;
+
+    if((action == FlipRSDRPreviewViewActionFrequencyChanged) &&
+       fliprsdr_settings_set_frequency_hz(&app->settings, frequency_hz)) {
+        app->settings_dirty = true;
+    }
+}
+
 void fliprsdr_app_apply_settings(FlipRSDRApp* app, bool reinit_transport) {
     furi_assert(app);
     fliprsdr_settings_validate(&app->settings);
@@ -256,6 +268,8 @@ static FlipRSDRApp* fliprsdr_app_alloc(void) {
         app->capture_view, fliprsdr_capture_view_action_callback, app);
     fliprsdr_frequency_editor_view_set_action_callback(
         app->frequency_editor_view, fliprsdr_frequency_editor_action_callback, app);
+    fliprsdr_preview_view_set_action_callback(
+        app->preview_view, fliprsdr_preview_view_action_callback, app);
 
     return app;
 }

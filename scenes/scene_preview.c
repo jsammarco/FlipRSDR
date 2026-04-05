@@ -13,5 +13,9 @@ bool fliprsdr_scene_preview_on_event(void* context, SceneManagerEvent event) {
 }
 
 void fliprsdr_scene_preview_on_exit(void* context) {
-    UNUSED(context);
+    FlipRSDRApp* app = context;
+    if(app->settings_dirty) {
+        fliprsdr_app_apply_settings(app, false);
+        app->settings_dirty = false;
+    }
 }

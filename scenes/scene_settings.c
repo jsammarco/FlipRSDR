@@ -13,7 +13,9 @@ enum {
     FlipRSDRSettingsItemTimeout,
     FlipRSDRSettingsItemGapThreshold,
     FlipRSDRSettingsItemRssiThreshold,
+    FlipRSDRSettingsItemAudio,
     FlipRSDRSettingsItemPreviewBand,
+    FlipRSDRSettingsItemRadioModule,
 };
 
 static void fliprsdr_scene_settings_frequency_preset_changed(VariableItem* item) {
@@ -116,6 +118,22 @@ static void fliprsdr_scene_settings_rssi_threshold_changed(VariableItem* item) {
     const uint8_t index = variable_item_get_current_value_index(item);
     app->settings.rssi_threshold_dbm = fliprsdr_settings_rssi_threshold_value(index);
     variable_item_set_current_value_text(item, fliprsdr_settings_rssi_threshold_label(index));
+    app->settings_dirty = true;
+}
+
+static void fliprsdr_scene_settings_audio_changed(VariableItem* item) {
+    FlipRSDRApp* app = variable_item_get_context(item);
+    app->settings.preview_audio = variable_item_get_current_value_index(item) != 0U;
+    variable_item_set_current_value_text(
+        item, fliprsdr_settings_bool_label(app->settings.preview_audio));
+    app->settings_dirty = true;
+}
+
+static void fliprsdr_scene_settings_radio_module_changed(VariableItem* item) {
+    FlipRSDRApp* app = variable_item_get_context(item);
+    app->settings.external_radio_module = variable_item_get_current_value_index(item) != 0U;
+    variable_item_set_current_value_text(
+        item, fliprsdr_settings_radio_module_label(app->settings.external_radio_module));
     app->settings_dirty = true;
 }
 
@@ -276,6 +294,12 @@ void fliprsdr_scene_settings_on_enter(void* context) {
             fliprsdr_settings_rssi_threshold_index(app->settings.rssi_threshold_dbm)));
 
     item = variable_item_list_add(
+        app->variable_item_list, "Audio", 2, fliprsdr_scene_settings_audio_changed, app);
+    variable_item_set_current_value_index(item, app->settings.preview_audio ? 1U : 0U);
+    variable_item_set_current_value_text(
+        item, fliprsdr_settings_bool_label(app->settings.preview_audio));
+
+    item = variable_item_list_add(
         app->variable_item_list,
         "Band span",
         fliprsdr_settings_preview_bandwidth_options_count(),
@@ -288,6 +312,16 @@ void fliprsdr_scene_settings_on_enter(void* context) {
         item,
         fliprsdr_settings_preview_bandwidth_label(
             fliprsdr_settings_preview_bandwidth_index(app->settings.preview_bandwidth_khz)));
+
+    item = variable_item_list_add(
+        app->variable_item_list,
+        "RF module",
+        2,
+        fliprsdr_scene_settings_radio_module_changed,
+        app);
+    variable_item_set_current_value_index(item, app->settings.external_radio_module ? 1U : 0U);
+    variable_item_set_current_value_text(
+        item, fliprsdr_settings_radio_module_label(app->settings.external_radio_module));
 
     variable_item_list_set_selected_item(
         app->variable_item_list,

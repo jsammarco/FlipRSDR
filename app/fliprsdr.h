@@ -12,7 +12,7 @@ extern "C" {
 
 #define FLIPRSDR_SETTINGS_PATH                  APP_DATA_PATH("fliprsdr.settings")
 #define FLIPRSDR_SETTINGS_MAGIC                 0x52U
-#define FLIPRSDR_SETTINGS_VERSION               6U
+#define FLIPRSDR_SETTINGS_VERSION               8U
 #define FLIPRSDR_BURST_TIMINGS_CAPACITY         4096U
 #define FLIPRSDR_CAPTURE_STREAM_DEPTH           1024U
 #define FLIPRSDR_PROTOCOL_LINE_MAX              256U
@@ -79,6 +79,8 @@ typedef struct {
     bool auto_send_after_burst;
     bool include_rssi;
     bool include_timestamp;
+    bool preview_audio;
+    bool external_radio_module;
     uint16_t max_pulse_count;
     uint16_t capture_timeout_ms;
     uint16_t gap_threshold_ms;

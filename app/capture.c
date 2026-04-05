@@ -2,17 +2,18 @@
 
 #include "burst_buffer.h"
 #include "protocol.h"
+#include "radio.h"
 #include "settings.h"
 #include "transport.h"
 
 #include <furi_hal.h>
-#include <furi_hal_resources.h>
-#include <lib/subghz/devices/cc1101_configs.h>
 #include <toolbox/level_duration.h>
 
 struct FlipRSDRCapture {
     FlipRSDRTransport* transport;
     FlipRSDRSettings settings;
+    FlipRSDRRadio radio;
+    bool audio_speaker_owned;
     FuriMutex* mutex;
     FuriStreamBuffer* raw_stream;
     FuriThread* worker_thread;
@@ -39,6 +40,12 @@ static void fliprsdr_capture_cleanup_worker(FlipRSDRCapture* capture) {
         furi_thread_join(capture->worker_thread);
         furi_thread_free(capture->worker_thread);
         capture->worker_thread = NULL;
+        if(capture->audio_speaker_owned) {
+            fliprsdr_radio_set_audio_mirror(&capture->radio, false);
+            furi_hal_speaker_release();
+            capture->audio_speaker_owned = false;
+        }
+        fliprsdr_radio_close(&capture->radio);
     }
 
     if(!capture->running && capture->raw_stream) {
@@ -109,7 +116,7 @@ static void fliprsdr_capture_finish_burst(FlipRSDRCapture* capture, bool truncat
 
     capture->working.truncated |= truncated;
     fliprsdr_capture_flush_live_chunk(capture);
-    capture->last_rssi = furi_hal_subghz_get_rssi();
+    capture->last_rssi = fliprsdr_radio_get_rssi(&capture->radio);
     fliprsdr_burst_buffer_complete(&capture->working, capture->last_rssi);
 
     if(fliprsdr_capture_stream_live_enabled(capture)) {
@@ -143,7 +150,7 @@ static void fliprsdr_capture_process_timing(
     bool level,
     uint32_t duration_us) {
     capture->last_event_tick = furi_get_tick();
-    capture->last_rssi = furi_hal_subghz_get_rssi();
+    capture->last_rssi = fliprsdr_radio_get_rssi(&capture->radio);
 
     if(!capture->in_burst) {
         if(!fliprsdr_capture_rssi_above_threshold(capture, capture->last_rssi)) {
@@ -227,8 +234,7 @@ static int32_t fliprsdr_capture_worker(void* context) {
         furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
     }
 
-    furi_hal_subghz_stop_async_rx();
-    furi_hal_subghz_sleep();
+    fliprsdr_radio_stop_async_rx(&capture->radio);
     furi_hal_power_suppress_charge_exit();
 
     capture->running = false;
@@ -240,6 +246,8 @@ FlipRSDRCapture* fliprsdr_capture_alloc(FlipRSDRTransport* transport) {
     FlipRSDRCapture* capture = malloc(sizeof(FlipRSDRCapture));
     capture->transport = transport;
     fliprsdr_settings_load_defaults(&capture->settings);
+    fliprsdr_radio_init(&capture->radio);
+    capture->audio_speaker_owned = false;
     capture->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     capture->raw_stream = NULL;
     capture->worker_thread = NULL;
@@ -283,8 +291,13 @@ bool fliprsdr_capture_start(FlipRSDRCapture* capture) {
     fliprsdr_capture_cleanup_worker(capture);
     if(capture->running) return true;
 
-    const uint32_t frequency = fliprsdr_capture_frequency_hz(capture);
-    if(!furi_hal_subghz_is_frequency_valid(frequency)) {
+    if(!fliprsdr_radio_open(&capture->radio, &capture->settings)) {
+        return false;
+    }
+
+    uint32_t frequency = fliprsdr_capture_frequency_hz(capture);
+    if(!fliprsdr_radio_is_frequency_valid(&capture->radio, frequency)) {
+        fliprsdr_radio_close(&capture->radio);
         return false;
     }
 
@@ -305,16 +318,34 @@ bool fliprsdr_capture_start(FlipRSDRCapture* capture) {
         sizeof(LevelDuration) * FLIPRSDR_CAPTURE_STREAM_DEPTH, sizeof(LevelDuration));
     capture->worker_thread =
         furi_thread_alloc_ex("FlipRSDRCap", 4096, fliprsdr_capture_worker, capture);
+    if(!capture->raw_stream || !capture->worker_thread) {
+        if(capture->worker_thread) {
+            furi_thread_free(capture->worker_thread);
+            capture->worker_thread = NULL;
+        }
+        if(capture->raw_stream) {
+            furi_stream_buffer_free(capture->raw_stream);
+            capture->raw_stream = NULL;
+        }
+        fliprsdr_radio_close(&capture->radio);
+        return false;
+    }
 
-    furi_hal_subghz_reset();
-    furi_hal_subghz_load_custom_preset(subghz_device_cc1101_preset_ook_270khz_async_regs);
-    furi_hal_subghz_set_frequency_and_path(frequency);
-    furi_hal_gpio_init(&gpio_cc1101_g0, GpioModeInput, GpioPullNo, GpioSpeedLow);
+    fliprsdr_radio_reset(&capture->radio);
+    fliprsdr_radio_load_preset(&capture->radio, FuriHalSubGhzPresetOok270Async);
+    frequency = fliprsdr_radio_set_frequency(&capture->radio, frequency);
+    capture->audio_speaker_owned = false;
+    if(capture->settings.preview_audio) {
+        capture->audio_speaker_owned = furi_hal_speaker_acquire(100);
+        if(capture->audio_speaker_owned) {
+            fliprsdr_radio_set_audio_mirror(&capture->radio, true);
+        }
+    }
     furi_hal_power_suppress_charge_enter();
 
     capture->running = true;
     furi_thread_start(capture->worker_thread);
-    furi_hal_subghz_start_async_rx(fliprsdr_capture_rx_callback, capture);
+    fliprsdr_radio_start_async_rx(&capture->radio, fliprsdr_capture_rx_callback, capture);
     capture->last_event_tick = furi_get_tick();
     return true;
 }

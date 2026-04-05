@@ -5,10 +5,12 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
 ## What it does
 
 - Captures ordered pulse/gap durations in microseconds using the firmware async Sub-GHz receive path
+- Supports both the internal Flipper CC1101 and compatible external CC1101 modules
 - Detects burst start, burst continuation, and burst end from gap timing and idle timeout
 - Preserves the full timing burst locally in buffered modes, including truncation and overflow flags
 - Streams the compact `fliprsdr` binary protocol by default, with JSON kept as a debug option
 - Supports USB CDC on dual-CDC channel `1` and BLE serial
+- Can mirror received RF activity to the Flipper speaker during capture and preview
 - Accepts simple remote-control commands over the same USB or BLE link for scan start/stop, frequency changes, and RSSI threshold updates
 
 ## Screenshots
@@ -67,6 +69,11 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
   - `Left` clears the buffered burst
   - `Right` sends the buffered burst
   - `Back` leaves the screen and stops capture
+- `Signal Preview`
+  - Sweeps around the configured center frequency and shows live RSSI activity
+  - `Left/Right` shifts the center frequency by `100 kHz`
+  - `Up/Down` shifts the center frequency by `1 MHz`
+  - If `Audio` is enabled, preview uses the same mirrored radio audio path as capture
 - `Settings`
   - Frequency preset
   - Frequency fine-tune offset
@@ -79,8 +86,20 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
   - Max pulse count
   - Capture timeout
   - Burst-end gap threshold
+  - Audio
+  - Preview band span
+  - RF module (`Internal` or `External`)
   - Debug send action
 - `About`
+
+## External CC1101 support
+
+- `RF module = Internal` uses the built-in Flipper CC1101
+- `RF module = External` uses a compatible external CC1101 connected to the GPIO header
+- The app now embeds the external CC1101 driver plugin so it is available when building and installing `FlipRSDR` by itself
+- Preview shows the active radio path (`INT`, `EXT`, or `EXT?`) and reports external open failures on-screen
+- The external CC1101 path probes multiple expansion GPIO candidates for the module `GDO0` data pin instead of assuming a single fixed wiring layout
+- `FlipRSDR` external-radio support is for CC1101-based Sub-GHz modules only; NRF24/Si24R1-style 2.4 GHz boards are not supported by this app
 
 ## Protocol and transport
 
@@ -118,6 +137,8 @@ The same transport is also used for inbound remote commands from the PC. Command
   - Internal app struct, view ids, and custom events
 - `app/settings.c` / `app/settings.h`
   - Persistent settings using `saved_struct`
+- `app/radio.c` / `app/radio.h`
+  - Shared internal/external radio wrapper, audio mirror control, and external CC1101 diagnostics
 - `app/burst_buffer.c` / `app/burst_buffer.h`
   - Fixed-capacity burst storage with truncation tracking
 - `app/capture.c` / `app/capture.h`
@@ -132,6 +153,8 @@ The same transport is also used for inbound remote commands from the PC. Command
   - `fliprsdr` binary encoding plus JSON compatibility formatting
 - `views/capture_view.c` / `views/capture_view.h`
   - Custom capture status screen
+- `views/preview_view.c` / `views/preview_view.h`
+  - Live sweep preview with speaker mirror audio, frequency nudging, and radio diagnostics
 - `scenes/`
   - Menu, capture, settings, and about scenes
 - `application.fam`
@@ -158,6 +181,7 @@ The same transport is also used for inbound remote commands from the PC. Command
 ## Notes and TODOs
 
 - The app currently uses the public async raw receive API directly and does not depend on protocol decode paths.
+- External module support currently targets CC1101-based Sub-GHz boards and not NRF24/Si24R1 2.4 GHz boards.
 - Buffered modes intentionally stop after one completed burst so the last burst can be preserved exactly and resent without being overwritten. This matches the v1 priority of “one complete burst at a time is acceptable”.
 - `TODO`: the OOK raw receive preset may need tuning per target signal family or future firmware changes.
 - `TODO`: USB transport currently assumes dual CDC channel `1` is the safest user-facing serial endpoint.
