@@ -56,7 +56,7 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
 
 ### Receiver app
 
-![FlipRSDR Receiver screenshot](https://raw.githubusercontent.com/jsammarco/FlipRSDR/refs/heads/main/screenshots/receiver%20screeshots/receiver%20screenshot3.jpg)
+![FlipRSDR Receiver screenshot](https://raw.githubusercontent.com/jsammarco/FlipRSDR/refs/heads/main/screenshots/receiver%20screeshots/receiver%20latest%20screenshot.JPG)
 
 ### Analyzer app
 
@@ -223,6 +223,7 @@ The Windows desktop companion app lives under `receiver/` and is called `FlipRSD
 - Optional audible playback of completed bursts
 - Automatic port refresh while disconnected, plus last-port recall on restart
 - Remote control panel for `start_scan`, `stop_scan`, `set_frequency`, and `set_rssi_threshold`
+- Smart replay pipeline for captures that preserve the tuned burst frequency for more accurate retransmission
 
 Receiver notes:
 The receiver records the burst frequency reported by the Flipper. New captures now preserve the actual tuned frequency returned by the radio, which improves replay accuracy when the hardware snaps to a nearby valid tuning step.
@@ -264,10 +265,13 @@ The offline analysis companion app lives under `analyzer/` and is called `FlipRS
 - Output: `build\FlipRSDR Analyzer.exe`
 - Loads saved `.fliprsdr` recordings from the receiver, plus legacy JSONL
 - Replays bursts over recording time with optional audio playback
+- Replays selected signals back to a connected Flipper, tested successfully with a ceiling fan remote
 - Shows waveform and a full recording waterfall view
 - Highlights repeated timing signatures and likely frame-like bursts
 - Attempts a lightweight short/long symbol decode for bursts that resemble simple PWM-style framing
+- Uses repeated/duplicate bursts to improve low-confidence decodes and fill in missing bits where the captures agree
 
 Analyzer notes:
 Replay uses each burst's stored frequency directly.
 Like the receiver, the analyzer waterfall is timing-based rather than a swept RF spectrum display.
+When several near-duplicate bursts are present, the analyzer aligns them and applies a consensus decode so uncertain bits in one burst can be resolved from matching captures.
