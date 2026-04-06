@@ -1583,6 +1583,8 @@ class AnalyzerMainWindow(QMainWindow):
             for batch_index, (commands, delay_s) in enumerate(batches):
                 for command in commands:
                     self._remote_serial.write(f"{command}\n".encode("utf-8"))
+                    QApplication.processEvents()
+                    time.sleep(0.015)
                 self._remote_serial.flush()
                 if batch_index + 1 < len(batches):
                     QApplication.processEvents()
