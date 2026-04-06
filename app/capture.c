@@ -13,6 +13,7 @@ struct FlipRSDRCapture {
     FlipRSDRTransport* transport;
     FlipRSDRSettings settings;
     FlipRSDRRadio radio;
+    uint32_t tuned_frequency_hz;
     bool audio_speaker_owned;
     FuriMutex* mutex;
     FuriStreamBuffer* raw_stream;
@@ -81,6 +82,22 @@ static uint32_t fliprsdr_capture_frequency_hz(const FlipRSDRCapture* capture) {
     return fliprsdr_settings_frequency_hz(&capture->settings);
 }
 
+static uint32_t fliprsdr_capture_effective_frequency_hz(const FlipRSDRCapture* capture) {
+    if(capture->in_burst) {
+        return capture->working.frequency_hz;
+    }
+    if(capture->buffered.valid && capture->buffered.frequency_hz) {
+        return capture->buffered.frequency_hz;
+    }
+    if(capture->replay.valid && capture->replay.frequency_hz) {
+        return capture->replay.frequency_hz;
+    }
+    if(capture->running && capture->tuned_frequency_hz) {
+        return capture->tuned_frequency_hz;
+    }
+    return fliprsdr_capture_frequency_hz(capture);
+}
+
 static void fliprsdr_capture_flush_live_chunk(FlipRSDRCapture* capture) {
     if(!fliprsdr_capture_stream_live_enabled(capture) || (capture->live_chunk_count == 0U)) {
         return;
@@ -102,7 +119,8 @@ static void fliprsdr_capture_begin_burst(FlipRSDRCapture* capture, bool first_le
         &capture->working,
         capture->session_id,
         capture->next_burst_id++,
-        fliprsdr_capture_frequency_hz(capture),
+        capture->tuned_frequency_hz ? capture->tuned_frequency_hz :
+                                      fliprsdr_capture_frequency_hz(capture),
         timestamp_ms,
         first_level);
     capture->in_burst = true;
@@ -269,6 +287,7 @@ FlipRSDRCapture* fliprsdr_capture_alloc(FlipRSDRTransport* transport) {
     capture->transport = transport;
     fliprsdr_settings_load_defaults(&capture->settings);
     fliprsdr_radio_init(&capture->radio);
+    capture->tuned_frequency_hz = 0U;
     capture->audio_speaker_owned = false;
     capture->mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     capture->raw_stream = NULL;
@@ -359,6 +378,7 @@ bool fliprsdr_capture_start(FlipRSDRCapture* capture) {
     fliprsdr_radio_reset(&capture->radio);
     fliprsdr_radio_load_preset(&capture->radio, FuriHalSubGhzPresetOok270Async);
     frequency = fliprsdr_radio_set_frequency(&capture->radio, frequency);
+    capture->tuned_frequency_hz = frequency;
     capture->audio_speaker_owned = false;
     if(capture->settings.preview_audio) {
         capture->audio_speaker_owned = furi_hal_speaker_acquire(100);
@@ -549,7 +569,8 @@ bool fliprsdr_capture_replay(FlipRSDRCapture* capture) {
     fliprsdr_radio_reset(&capture->radio);
     fliprsdr_radio_idle(&capture->radio);
     fliprsdr_radio_load_preset(&capture->radio, FuriHalSubGhzPresetOok270Async);
-    fliprsdr_radio_set_frequency(&capture->radio, frequency_hz);
+    frequency_hz = fliprsdr_radio_set_frequency(&capture->radio, frequency_hz);
+    capture->tuned_frequency_hz = frequency_hz;
 
     const bool ok =
         fliprsdr_radio_start_async_tx(&capture->radio, fliprsdr_capture_replay_callback, capture);
@@ -594,7 +615,7 @@ void fliprsdr_capture_copy_snapshot(
     snapshot->current_stored_count = capture->working.stored_count;
     snapshot->buffered_total_count = capture->buffered.total_count;
     snapshot->buffered_stored_count = capture->buffered.stored_count;
-    snapshot->frequency_hz = fliprsdr_capture_frequency_hz(capture);
+    snapshot->frequency_hz = fliprsdr_capture_effective_frequency_hz(capture);
     snapshot->last_rssi = capture->last_rssi;
     snapshot->replay_status = capture->replay_status;
     snapshot->replay_total_count = capture->replay.total_count;

@@ -205,7 +205,8 @@ void fliprsdr_capture_view_set_snapshot(
         capture_view->view,
         FlipRSDRCaptureViewModel * model,
         {
-            const uint32_t frequency_hz = fliprsdr_settings_frequency_hz(settings);
+            const uint32_t frequency_hz =
+                capture->frequency_hz ? capture->frequency_hz : fliprsdr_settings_frequency_hz(settings);
             snprintf(
                 model->frequency,
                 sizeof(model->frequency),
