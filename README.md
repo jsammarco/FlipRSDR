@@ -6,6 +6,8 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
 ## What it does
 
 - Captures ordered pulse/gap durations in microseconds using the firmware async Sub-GHz receive path
+- Decodes saved and live captures in the desktop analyzer using lightweight timing-pattern analysis plus multi-burst consensus recovery
+- Replays captured signals from the desktop tools back through a connected Flipper using the stored tuned burst frequency for more accurate retransmission
 - Supports both the internal Flipper CC1101 and compatible external CC1101 modules
 - Detects burst start, burst continuation, and burst end from gap timing and idle timeout
 - Preserves the full timing burst locally in buffered modes, including truncation and overflow flags
