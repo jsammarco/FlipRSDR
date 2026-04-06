@@ -263,6 +263,14 @@ class SerialReceiverThread(QThread):
             return None
         return text[start : end + 1]
 
+    @staticmethod
+    def _optional_int(value: object) -> int | None:
+        return int(value) if value is not None else None
+
+    @staticmethod
+    def _optional_float(value: object) -> float | None:
+        return float(value) if value is not None else None
+
     def _get_or_create_burst(self, message: dict[str, Any]) -> BurstData:
         session = int(message.get("session", 0))
         burst = int(message.get("burst", 0))
@@ -324,11 +332,11 @@ class SerialReceiverThread(QThread):
                 session=int(message.get("session", 0)),
                 burst=int(message.get("burst", 0)),
                 frequency_hz=int(message.get("freq", 0)),
-                timestamp=int(message["timestamp"]) if "timestamp" in message else None,
+                timestamp=self._optional_int(message.get("timestamp")),
                 first_level=bool(int(message.get("first_level", 1))),
                 timings=[int(value) for value in message.get("timings", [])],
                 count=int(message.get("count", len(message.get("timings", [])))),
-                rssi=float(message["rssi"]) if "rssi" in message else None,
+                rssi=self._optional_float(message.get("rssi")),
                 truncated=bool(message.get("truncated", False)),
                 complete=True,
             )

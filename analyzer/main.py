@@ -103,6 +103,14 @@ def load_recording(path: Path) -> list[BurstData]:
         return _load_binary_recording(path)
 
 
+def _optional_int(value: object) -> int | None:
+    return int(value) if value is not None else None
+
+
+def _optional_float(value: object) -> float | None:
+    return float(value) if value is not None else None
+
+
 def _load_json_recording(path: Path) -> list[BurstData]:
     bursts: list[BurstData] = []
     with path.open("r", encoding="utf-8") as handle:
@@ -123,11 +131,11 @@ def _load_json_recording(path: Path) -> list[BurstData]:
                     session=int(message.get("session", 0)),
                     burst=int(message.get("burst", 0)),
                     frequency_hz=int(message.get("freq", 0)),
-                    timestamp=int(message["timestamp"]) if "timestamp" in message else None,
+                    timestamp=_optional_int(message.get("timestamp")),
                     first_level=bool(int(message.get("first_level", 1))),
                     timings=[int(value) for value in message.get("timings", [])],
                     count=int(message.get("count", len(message.get("timings", [])))),
-                    rssi=float(message["rssi"]) if "rssi" in message else None,
+                    rssi=_optional_float(message.get("rssi")),
                     truncated=bool(message.get("truncated", False)),
                 )
             )
@@ -154,11 +162,11 @@ def _load_binary_recording(path: Path) -> list[BurstData]:
                 session=int(message.get("session", 0)),
                 burst=int(message.get("burst", 0)),
                 frequency_hz=int(message.get("freq", 0)),
-                timestamp=int(message["timestamp"]) if "timestamp" in message else None,
+                timestamp=_optional_int(message.get("timestamp")),
                 first_level=bool(int(message.get("first_level", 1))),
                 timings=[int(value) for value in message.get("timings", [])],
                 count=int(message.get("count", len(message.get("timings", [])))),
-                rssi=float(message["rssi"]) if "rssi" in message else None,
+                rssi=_optional_float(message.get("rssi")),
                 truncated=bool(message.get("truncated", False)),
             )
         )
@@ -213,6 +221,76 @@ def cluster_durations_us(timings: list[int], tolerance: float = 0.28) -> list[tu
     return [(int(round(sum(cluster) / len(cluster))), len(cluster)) for cluster in clusters]
 
 
+def _classify_duration(value: int, short_us: int, long_us: int, tolerance: float = 0.38) -> str:
+    short_error = abs(value - short_us) / max(short_us, 1)
+    long_error = abs(value - long_us) / max(long_us, 1)
+    best_error = min(short_error, long_error)
+    if best_error > tolerance:
+        return "?"
+    return "S" if short_error <= long_error else "L"
+
+
+def _decode_sync_pair_frame(timings: list[int]) -> str | None:
+    positive = [value for value in timings if value > 0]
+    if len(positive) < 20:
+        return None
+
+    candidate_clusters = [
+        (center, count)
+        for center, count in cluster_durations_us(positive, tolerance=0.22)
+        if 80 <= center <= 2500
+    ]
+    if len(candidate_clusters) < 2:
+        return None
+
+    symbol_clusters = sorted(candidate_clusters, key=lambda item: item[1], reverse=True)[:2]
+    short_us, long_us = sorted(center for center, _count in symbol_clusters)
+    ratio = long_us / max(short_us, 1)
+    if ratio < 1.45 or ratio > 3.5:
+        return None
+
+    sync_threshold = max(int(long_us * 4.0), 3000)
+    sync_index = next((index for index, value in enumerate(timings) if value >= sync_threshold), None)
+    if sync_index is None or sync_index >= len(timings) - 4:
+        return None
+
+    payload = [value for value in timings[sync_index + 1 :] if 0 < value < sync_threshold]
+    pair_count = len(payload) // 2
+    if pair_count < 12:
+        return None
+
+    bits: list[str] = []
+    decoded_pairs = 0
+    for first, second in zip(payload[0::2], payload[1::2]):
+        first_kind = _classify_duration(first, short_us, long_us)
+        second_kind = _classify_duration(second, short_us, long_us)
+        if first_kind == "S" and second_kind == "L":
+            bits.append("0")
+            decoded_pairs += 1
+        elif first_kind == "L" and second_kind == "S":
+            bits.append("1")
+            decoded_pairs += 1
+        else:
+            bits.append("?")
+
+    confidence = decoded_pairs / max(len(bits), 1)
+    if confidence < 0.75:
+        return None
+
+    bit_string = "".join(bits)
+    padded = "".join(bit if bit in {"0", "1"} else "0" for bit in bits)
+    hex_groups = [
+        f"{int(padded[index : index + 4], 2):X}"
+        for index in range(0, len(padded) - (len(padded) % 4), 4)
+    ]
+    hex_preview = "".join(hex_groups[:16]) if hex_groups else "n/a"
+    return (
+        f"Sync/pulse-width frame detected. Sync {timings[sync_index]} us, "
+        f"symbols ~{short_us}/{long_us} us, {len(bits)} bits. "
+        f"Bits: {bit_string[:96]} Hex: {hex_preview} (confidence {confidence:.0%})"
+    )
+
+
 def try_decode_burst(burst: BurstData) -> str:
     if len(burst.timings) < 8:
         return "Too short to decode confidently."
@@ -220,6 +298,10 @@ def try_decode_burst(burst: BurstData) -> str:
     timings = [value for value in burst.timings if value > 0]
     if len(timings) < 8:
         return "Not enough non-zero timings."
+
+    sync_pair_decode = _decode_sync_pair_frame(timings)
+    if sync_pair_decode is not None:
+        return sync_pair_decode
 
     clusters = cluster_durations_us(timings)
     if len(clusters) < 2:
