@@ -1149,7 +1149,6 @@ class AnalyzerMainWindow(QMainWindow):
         )
         self.session_value.setText(str(burst.session))
         self.burst_value.setText(str(burst.burst))
-        self.freq_value.setText(f"{burst.frequency_hz / 1_000_000:.3f} MHz" if burst.frequency_hz else "-")
         self.count_value.setText(str(burst.timing_count))
         self.duration_value.setText(f"{burst.total_duration_us / 1000.0:.3f} ms")
         self.rssi_value.setText(f"{burst.rssi:.1f} dBm" if burst.rssi is not None else "-")
@@ -1162,6 +1161,28 @@ class AnalyzerMainWindow(QMainWindow):
             row_max = min(len(self._bursts), self._current_index + 24)
             self.waterfall_plot.setYRange(float(row_min), float(max(row_max, row_min + 1)), padding=0.0)
         self._update_selection_ui()
+
+    def _format_frequency_summary(self, bursts: Iterable[BurstData]) -> str:
+        frequencies = sorted({burst.frequency_hz for burst in bursts if burst.frequency_hz > 0})
+        if not frequencies:
+            return "-"
+        if len(frequencies) == 1:
+            return f"{frequencies[0] / 1_000_000:.3f} MHz"
+        if len(frequencies) <= 4:
+            return ", ".join(f"{frequency / 1_000_000:.3f} MHz" for frequency in frequencies)
+        return (
+            f"{frequencies[0] / 1_000_000:.3f} MHz to "
+            f"{frequencies[-1] / 1_000_000:.3f} MHz ({len(frequencies)} bins)"
+        )
+
+    def _update_frequency_label(self) -> None:
+        selected_bursts = [burst for _index, burst in self._selected_bursts()]
+        if selected_bursts:
+            self.freq_value.setText(self._format_frequency_summary(selected_bursts))
+            return
+
+        burst = self._current_burst()
+        self.freq_value.setText(self._format_frequency_summary([burst]) if burst is not None else "-")
 
     def _selection_range(self) -> tuple[int, int]:
         if not self._bursts:
@@ -1199,6 +1220,7 @@ class AnalyzerMainWindow(QMainWindow):
             self.save_selection_button.setEnabled(False)
             self.replay_selection_button.setEnabled(False)
             self.waterfall_selection_region.hide()
+            self._update_frequency_label()
             return
 
         start, end = self._selection_range()
@@ -1213,6 +1235,7 @@ class AnalyzerMainWindow(QMainWindow):
         self.replay_selection_button.setEnabled(self._remote_serial is not None)
         self.waterfall_selection_region.setRegion((float(start), float(end + 1)))
         self.waterfall_selection_region.show()
+        self._update_frequency_label()
 
     def _on_waterfall_drag_selection(self, start_row: float, end_row: float, finished: bool) -> None:
         if not self._bursts:
