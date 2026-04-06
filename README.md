@@ -71,6 +71,7 @@ FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pu
   - `Back` leaves the screen and stops capture
 - `Signal Preview`
   - Sweeps around the configured center frequency and shows live RSSI activity
+  - Preview is for inspection only; capture and replay still operate on a single tuned frequency rather than the whole preview span
   - `Left/Right` shifts the center frequency by `100 kHz`
   - `Up/Down` shifts the center frequency by `1 MHz`
   - If `Audio` is enabled, preview uses the same mirrored radio audio path as capture
@@ -142,7 +143,7 @@ The same transport is also used for inbound remote commands from the PC. Command
 - `app/burst_buffer.c` / `app/burst_buffer.h`
   - Fixed-capacity burst storage with truncation tracking
 - `app/capture.c` / `app/capture.h`
-  - Raw async Sub-GHz receive worker and burst assembly
+  - Raw async Sub-GHz receive worker and burst assembly, including storing the actual tuned RX/TX frequency with buffered bursts and replay
 - `app/transport.c` / `app/transport.h`
   - Shared bidirectional transport thread, backend selection, and command callback dispatch
 - `app/transport_usb.c`
@@ -152,7 +153,7 @@ The same transport is also used for inbound remote commands from the PC. Command
 - `app/protocol.c` / `app/protocol.h`
   - `fliprsdr` binary encoding plus JSON compatibility formatting
 - `views/capture_view.c` / `views/capture_view.h`
-  - Custom capture status screen
+  - Custom capture status screen that shows the effective capture/replay frequency
 - `views/preview_view.c` / `views/preview_view.h`
   - Live sweep preview with speaker mirror audio, frequency nudging, and radio diagnostics
 - `scenes/`
@@ -223,6 +224,10 @@ The Windows desktop companion app lives under `receiver/` and is called `FlipRSD
 - Automatic port refresh while disconnected, plus last-port recall on restart
 - Remote control panel for `start_scan`, `stop_scan`, `set_frequency`, and `set_rssi_threshold`
 
+Receiver notes:
+The receiver records the burst frequency reported by the Flipper. New captures now preserve the actual tuned frequency returned by the radio, which improves replay accuracy when the hardware snaps to a nearby valid tuning step.
+The receiver waterfall is timing-based, not RF-frequency-based. It visualizes pulse/gap duration distribution, so it does not show within-band preview offsets.
+
 The receiver can drive the Flipper remotely after connection. The current UI exposes:
 
 - Start/stop scan buttons
@@ -262,3 +267,7 @@ The offline analysis companion app lives under `analyzer/` and is called `FlipRS
 - Shows waveform and a full recording waterfall view
 - Highlights repeated timing signatures and likely frame-like bursts
 - Attempts a lightweight short/long symbol decode for bursts that resemble simple PWM-style framing
+
+Analyzer notes:
+Replay uses each burst's stored frequency directly.
+Like the receiver, the analyzer waterfall is timing-based rather than a swept RF spectrum display.
