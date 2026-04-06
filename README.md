@@ -1,5 +1,6 @@
 # FlipRSDR
 
+![DOWNLOADS](https://github.com/jsammarco/FlipRSDR/releases)
 FlipRSDR is a Flipper Zero external app that captures raw demodulated Sub-GHz pulse/gap timings and streams them to a PC over USB CDC or BLE serial. It is intentionally focused on pulse timing fidelity rather than protocol decoding, and the transport is now bidirectional so a desktop client can also remote-control capture settings.
 
 ## What it does
