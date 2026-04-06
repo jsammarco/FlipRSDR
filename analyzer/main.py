@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import io
 import json
 import math
@@ -399,6 +400,7 @@ class AnalyzerMainWindow(QMainWindow):
         self._bursts: list[BurstData] = []
         self._waterfall_rows: list[np.ndarray] = []
         self._decode_cache: dict[int, str] = {}
+        self._recording_path: Path | None = None
         self._current_index = -1
         self._playback_speed = DEFAULT_PLAYBACK_SPEED
         self._playback_timer = QTimer(self)
@@ -426,6 +428,7 @@ class AnalyzerMainWindow(QMainWindow):
         controls.setSpacing(8)
 
         self.open_button = QPushButton("Open Recording")
+        self.export_button = QPushButton("Export CSV")
         self.prev_button = QPushButton("Prev")
         self.play_button = QPushButton("Play")
         self.next_button = QPushButton("Next")
@@ -438,6 +441,7 @@ class AnalyzerMainWindow(QMainWindow):
         self.view_combo.addItems(["Waveform", "Waterfall"])
 
         self.open_button.clicked.connect(self._open_recording)
+        self.export_button.clicked.connect(self._export_decoded_csv)
         self.prev_button.clicked.connect(self._select_previous_burst)
         self.play_button.clicked.connect(self._toggle_playback)
         self.next_button.clicked.connect(self._select_next_burst)
@@ -445,6 +449,7 @@ class AnalyzerMainWindow(QMainWindow):
         self.view_combo.currentTextChanged.connect(self._sync_view_mode)
 
         controls.addWidget(self.open_button)
+        controls.addWidget(self.export_button)
         controls.addSpacing(8)
         controls.addWidget(self.prev_button)
         controls.addWidget(self.play_button)
@@ -475,6 +480,15 @@ class AnalyzerMainWindow(QMainWindow):
         self.rssi_value = QLabel("-")
         self.decode_value = QLabel("-")
         self.decode_value.setWordWrap(True)
+        self.copy_decode_button = QPushButton("Copy")
+        self.copy_decode_button.clicked.connect(self._copy_decode_guess)
+
+        decode_row = QWidget()
+        decode_row_layout = QHBoxLayout(decode_row)
+        decode_row_layout.setContentsMargins(0, 0, 0, 0)
+        decode_row_layout.setSpacing(8)
+        decode_row_layout.addWidget(self.decode_value, 1)
+        decode_row_layout.addWidget(self.copy_decode_button, 0, Qt.AlignRight)
 
         stats_layout.addRow("File", self.file_value)
         stats_layout.addRow("Playback", self.playback_value)
@@ -484,7 +498,7 @@ class AnalyzerMainWindow(QMainWindow):
         stats_layout.addRow("Timings", self.count_value)
         stats_layout.addRow("Duration", self.duration_value)
         stats_layout.addRow("RSSI", self.rssi_value)
-        stats_layout.addRow("Decode Guess", self.decode_value)
+        stats_layout.addRow("Decode Guess", decode_row)
 
         stats_container = QWidget()
         stats_container.setLayout(stats_layout)
@@ -549,6 +563,10 @@ class AnalyzerMainWindow(QMainWindow):
         open_action.triggered.connect(self._open_recording)
         self.addAction(open_action)
 
+        export_action = QAction("Export CSV", self)
+        export_action.triggered.connect(self._export_decoded_csv)
+        self.addAction(export_action)
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._save_ui_settings()
         self._stop_playback()
@@ -610,6 +628,7 @@ class AnalyzerMainWindow(QMainWindow):
 
     def _load_bursts(self, path: Path, bursts: list[BurstData]) -> None:
         self._stop_playback()
+        self._recording_path = path
         self._bursts = bursts
         self._waterfall_rows = [burst_histogram_row(burst) for burst in bursts]
         self._decode_cache.clear()
@@ -725,6 +744,13 @@ class AnalyzerMainWindow(QMainWindow):
         )
         self.analysis_view.setPlainText("\n".join(lines))
 
+    def _decode_text_for_index(self, index: int) -> str:
+        decode_text = self._decode_cache.get(index)
+        if decode_text is None and 0 <= index < len(self._bursts):
+            decode_text = try_decode_burst(self._bursts[index])
+            self._decode_cache[index] = decode_text
+        return decode_text or "-"
+
     def _show_current_burst(self) -> None:
         burst = self._current_burst()
         if burst is None:
@@ -749,11 +775,7 @@ class AnalyzerMainWindow(QMainWindow):
         self.count_value.setText(str(burst.timing_count))
         self.duration_value.setText(f"{burst.total_duration_us / 1000.0:.3f} ms")
         self.rssi_value.setText(f"{burst.rssi:.1f} dBm" if burst.rssi is not None else "-")
-        decode_text = self._decode_cache.get(self._current_index)
-        if decode_text is None:
-            decode_text = try_decode_burst(burst)
-            self._decode_cache[self._current_index] = decode_text
-        self.decode_value.setText(decode_text)
+        self.decode_value.setText(self._decode_text_for_index(self._current_index))
         self._render_waveform(burst)
         self._update_timeline_cursor()
         self.waterfall_cursor.setValue(float(self._current_index))
@@ -844,6 +866,77 @@ class AnalyzerMainWindow(QMainWindow):
                 delay_ms = min(1000.0, max(delay_ms, timestamp_gap_ms))
         scaled_delay_ms = delay_ms / max(self._playback_speed, 0.01)
         return int(max(15, round(scaled_delay_ms)))
+
+    def _copy_decode_guess(self) -> None:
+        if not self._bursts:
+            QMessageBox.information(self, APP_NAME, "Open a recording first.")
+            return
+        decode_text = self._decode_text_for_index(self._current_index)
+        QApplication.clipboard().setText(decode_text)
+        self.statusBar().showMessage("Decode guess copied to clipboard", 2500)
+
+    def _export_decoded_csv(self) -> None:
+        if not self._bursts:
+            QMessageBox.information(self, APP_NAME, "Open a recording first.")
+            return
+
+        default_name = (
+            f"{self._recording_path.stem}_decoded.csv"
+            if self._recording_path is not None
+            else "fliprsdr_decoded.csv"
+        )
+        default_dir = str(self._recording_path.parent) if self._recording_path is not None else str(Path.cwd())
+        selected, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export decoded bursts to CSV",
+            str(Path(default_dir) / default_name),
+            "CSV Files (*.csv);;All Files (*)",
+        )
+        if not selected:
+            return
+
+        output_path = Path(selected)
+        try:
+            with output_path.open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(
+                    [
+                        "index",
+                        "session",
+                        "burst",
+                        "frequency_hz",
+                        "timestamp_ms",
+                        "timing_count",
+                        "duration_us",
+                        "rssi_dbm",
+                        "truncated",
+                        "first_level",
+                        "decode_guess",
+                        "timings_us",
+                    ]
+                )
+                for index, burst in enumerate(self._bursts, start=1):
+                    writer.writerow(
+                        [
+                            index,
+                            burst.session,
+                            burst.burst,
+                            burst.frequency_hz,
+                            burst.timestamp if burst.timestamp is not None else "",
+                            burst.timing_count,
+                            burst.total_duration_us,
+                            burst.rssi if burst.rssi is not None else "",
+                            int(burst.truncated),
+                            int(burst.first_level),
+                            self._decode_text_for_index(index - 1),
+                            " ".join(str(value) for value in burst.timings),
+                        ]
+                    )
+        except OSError as exc:
+            QMessageBox.critical(self, APP_NAME, f"Unable to export CSV:\n{exc}")
+            return
+
+        self.statusBar().showMessage(f"Exported decoded bursts to {output_path.name}", 4000)
 
     def _advance_playback(self) -> None:
         if not self._bursts:
