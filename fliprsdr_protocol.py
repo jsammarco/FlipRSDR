@@ -9,6 +9,7 @@ PROTOCOL_FORMAT_JSON = "json"
 
 PROTOCOL_VERSION = 0x01
 HEADER_SIZE = 8
+REPLAY_COMMAND_MAX_LINE = 440
 
 PACKET_BURST_START = 0x01
 PACKET_TIMING_CHUNK = 0x02
@@ -222,6 +223,54 @@ def encode_recording_burst(message: Mapping[str, Any], timings_per_chunk: int = 
         sequence += 1
     chunks.append(_encode_burst_end(message, sequence))
     return b"".join(chunks)
+
+
+def build_replay_commands(
+    frequency_hz: int,
+    first_level: bool,
+    timings: Iterable[int],
+    *,
+    max_line_length: int = REPLAY_COMMAND_MAX_LINE,
+) -> list[str]:
+    timing_list = [int(value) for value in timings]
+    if not timing_list:
+        raise ValueError("Replay requires at least one timing value")
+    if frequency_hz <= 0:
+        raise ValueError("Replay requires a valid frequency")
+    if max_line_length < 32:
+        raise ValueError("Replay command line budget is too small")
+
+    commands = [f"replay_begin {int(frequency_hz)} {1 if first_level else 0} {len(timing_list)}"]
+    offset = 0
+    chunk: list[str] = []
+    chunk_len = 0
+
+    for timing in timing_list:
+        if timing <= 0:
+            raise ValueError("Replay timings must be positive integers")
+        token = str(timing)
+        if not chunk:
+            projected = len(f"replay_chunk {offset} {token}")
+        else:
+            projected = len(f"replay_chunk {offset} ") + chunk_len + 1 + len(token)
+
+        if chunk and projected > max_line_length:
+            commands.append(f"replay_chunk {offset} {','.join(chunk)}")
+            offset += len(chunk)
+            chunk = [token]
+            chunk_len = len(token)
+            continue
+
+        chunk.append(token)
+        chunk_len = len(",".join(chunk))
+
+        if len(f"replay_chunk {offset} {chunk[0]}") > max_line_length:
+            raise ValueError("Replay timing value exceeds the command line budget")
+
+    if chunk:
+        commands.append(f"replay_chunk {offset} {','.join(chunk)}")
+    commands.append("replay_commit")
+    return commands
 
 
 def parse_packet(decoded_packet: bytes) -> dict[str, Any]:

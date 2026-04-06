@@ -7,10 +7,12 @@ import math
 import sys
 import tempfile
 import threading
+import time
 import wave
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterable
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
@@ -18,6 +20,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import numpy as np
 import pyqtgraph as pg
+import serial
+import serial.tools.list_ports
 from PySide6.QtCore import QSettings, QTimer, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
@@ -37,7 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from fliprsdr_protocol import decode_binary_recording
+from fliprsdr_protocol import build_replay_commands, decode_binary_recording, encode_recording_burst
 
 try:
     import winsound
@@ -55,6 +59,47 @@ PLAYBACK_SPEED_OPTIONS = [0.25, 0.5, 1.0, 2.0, 4.0]
 MAX_WAVEFORM_POINTS = 4000
 MAX_AUDIO_BURST_US = 2_000_000
 MAX_AUDIO_TIMINGS = 4096
+DEFAULT_REMOTE_BAUD_RATE = 9600
+REMOTE_BAUD_OPTIONS = ["9600", "115200", "230400"]
+
+
+class WaterfallPlotWidget(pg.PlotWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.selection_callback = None
+        self._dragging_selection = False
+        self._drag_start_row = 0.0
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        if event.button() == Qt.LeftButton:
+            self._dragging_selection = True
+            self._drag_start_row = self._event_row(event)
+            if self.selection_callback is not None:
+                self.selection_callback(self._drag_start_row, self._drag_start_row, False)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        if self._dragging_selection:
+            if self.selection_callback is not None:
+                self.selection_callback(self._drag_start_row, self._event_row(event), False)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        if self._dragging_selection and event.button() == Qt.LeftButton:
+            self._dragging_selection = False
+            if self.selection_callback is not None:
+                self.selection_callback(self._drag_start_row, self._event_row(event), True)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _event_row(self, event) -> float:
+        scene_pos = self.mapToScene(event.position().toPoint())
+        return float(self.plotItem.vb.mapSceneToView(scene_pos).y())
 
 
 @dataclass
@@ -522,6 +567,9 @@ class AnalyzerMainWindow(QMainWindow):
         self._audio_playback_index = 0
         self._audio_lock = threading.Lock()
         self._last_audio_index = -1
+        self._selection_start = -1
+        self._selection_end = -1
+        self._remote_serial: serial.Serial | None = None
 
         pg.setConfigOptions(antialias=True, background="#05070a", foreground="#d8e1eb")
         self._build_ui()
@@ -540,6 +588,7 @@ class AnalyzerMainWindow(QMainWindow):
 
         self.open_button = QPushButton("Open Recording")
         self.export_button = QPushButton("Export CSV")
+        self.save_selection_button = QPushButton("Save Selection")
         self.prev_button = QPushButton("Prev")
         self.play_button = QPushButton("Play")
         self.next_button = QPushButton("Next")
@@ -553,6 +602,7 @@ class AnalyzerMainWindow(QMainWindow):
 
         self.open_button.clicked.connect(self._open_recording)
         self.export_button.clicked.connect(self._export_decoded_csv)
+        self.save_selection_button.clicked.connect(self._save_selected_bursts)
         self.prev_button.clicked.connect(self._select_previous_burst)
         self.play_button.clicked.connect(self._toggle_playback)
         self.next_button.clicked.connect(self._select_next_burst)
@@ -561,6 +611,7 @@ class AnalyzerMainWindow(QMainWindow):
 
         controls.addWidget(self.open_button)
         controls.addWidget(self.export_button)
+        controls.addWidget(self.save_selection_button)
         controls.addSpacing(8)
         controls.addWidget(self.prev_button)
         controls.addWidget(self.play_button)
@@ -577,6 +628,37 @@ class AnalyzerMainWindow(QMainWindow):
 
         main_layout.addLayout(controls)
 
+        remote_controls = QHBoxLayout()
+        remote_controls.setSpacing(8)
+
+        self.port_combo = QComboBox()
+        self.port_combo.setMinimumWidth(180)
+        self.refresh_ports_button = QPushButton("Refresh Ports")
+        self.remote_baud_combo = QComboBox()
+        self.remote_baud_combo.setEditable(True)
+        self.remote_baud_combo.addItems(REMOTE_BAUD_OPTIONS)
+        self.remote_connect_button = QPushButton("Connect Flipper")
+        self.replay_selection_button = QPushButton("Replay Selection")
+        self.remote_status_value = QLabel("Flipper disconnected")
+        self.remote_status_value.setStyleSheet("color: #ff9c74;")
+
+        self.refresh_ports_button.clicked.connect(self._refresh_ports)
+        self.remote_connect_button.clicked.connect(self._toggle_remote_connection)
+        self.replay_selection_button.clicked.connect(self._replay_selected_bursts)
+        self.port_combo.currentTextChanged.connect(self._on_remote_port_changed)
+        self.remote_baud_combo.currentTextChanged.connect(self._on_remote_baud_changed)
+
+        remote_controls.addWidget(QLabel("Flipper"))
+        remote_controls.addWidget(self.port_combo)
+        remote_controls.addWidget(self.refresh_ports_button)
+        remote_controls.addWidget(QLabel("Baud"))
+        remote_controls.addWidget(self.remote_baud_combo)
+        remote_controls.addWidget(self.remote_connect_button)
+        remote_controls.addWidget(self.replay_selection_button)
+        remote_controls.addStretch(1)
+        remote_controls.addWidget(self.remote_status_value)
+        main_layout.addLayout(remote_controls)
+
         stats_layout = QFormLayout()
         stats_layout.setHorizontalSpacing(18)
         stats_layout.setVerticalSpacing(6)
@@ -589,6 +671,7 @@ class AnalyzerMainWindow(QMainWindow):
         self.count_value = QLabel("0")
         self.duration_value = QLabel("0 ms")
         self.rssi_value = QLabel("-")
+        self.selection_value = QLabel("-")
         self.decode_value = QLabel("-")
         self.decode_value.setWordWrap(True)
         self.copy_decode_button = QPushButton("Copy")
@@ -609,6 +692,7 @@ class AnalyzerMainWindow(QMainWindow):
         stats_layout.addRow("Timings", self.count_value)
         stats_layout.addRow("Duration", self.duration_value)
         stats_layout.addRow("RSSI", self.rssi_value)
+        stats_layout.addRow("Selection", self.selection_value)
         stats_layout.addRow("Decode Guess", decode_row)
 
         stats_container = QWidget()
@@ -621,7 +705,7 @@ class AnalyzerMainWindow(QMainWindow):
         self.waveform_plot.showGrid(x=True, y=True, alpha=0.28)
         self.waveform_curve = self.waveform_plot.plot(pen=pg.mkPen("#5dd4ff", width=1.6))
 
-        self.waterfall_plot = pg.PlotWidget()
+        self.waterfall_plot = WaterfallPlotWidget()
         self.waterfall_plot.setLabel("bottom", "Pulse / gap duration", units="us")
         self.waterfall_plot.setLabel("left", "Bursts over time")
         self.waterfall_plot.showGrid(x=False, y=False)
@@ -631,8 +715,17 @@ class AnalyzerMainWindow(QMainWindow):
         self.waterfall_plot.addItem(self.waterfall_image)
         self.waterfall_cursor = pg.InfiniteLine(angle=0, movable=False, pen=pg.mkPen("#ffffff", width=1))
         self.waterfall_plot.addItem(self.waterfall_cursor)
+        self.waterfall_selection_region = pg.LinearRegionItem(
+            values=(0.0, 1.0),
+            orientation=getattr(pg.LinearRegionItem, "Horizontal", "horizontal"),
+            movable=False,
+            brush=pg.mkBrush(93, 212, 255, 44),
+            pen=pg.mkPen("#5dd4ff", width=1.2),
+        )
+        self.waterfall_plot.addItem(self.waterfall_selection_region)
         self.waterfall_image.setLookupTable(self._build_sdr_lut())
         self.waterfall_image.setLevels((0.0, 1.0))
+        self.waterfall_plot.selection_callback = self._on_waterfall_drag_selection
         self._configure_waterfall_axes()
 
         plot_stack = QWidget()
@@ -678,11 +771,20 @@ class AnalyzerMainWindow(QMainWindow):
         export_action.triggered.connect(self._export_decoded_csv)
         self.addAction(export_action)
 
+        save_selection_action = QAction("Save Selection", self)
+        save_selection_action.triggered.connect(self._save_selected_bursts)
+        self.addAction(save_selection_action)
+
+        self._refresh_ports()
+        self._update_remote_ui()
+        self._update_selection_ui()
+
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._save_ui_settings()
         self._stop_playback()
         self._stop_audio_playback()
         self._cleanup_audio_temp_files()
+        self._disconnect_remote()
         super().closeEvent(event)
 
     def _build_sdr_lut(self) -> np.ndarray:
@@ -745,6 +847,8 @@ class AnalyzerMainWindow(QMainWindow):
         self._decode_cache.clear()
         self._decode_detail_cache.clear()
         self._current_index = 0 if bursts else -1
+        self._selection_start = self._current_index
+        self._selection_end = self._current_index
         self._last_audio_index = -1
         self.file_value.setText(str(path))
         self._apply_consensus_decodes()
@@ -752,6 +856,7 @@ class AnalyzerMainWindow(QMainWindow):
         self._render_waterfall()
         self._render_analysis()
         self._show_current_burst()
+        self._update_selection_ui()
         self.statusBar().showMessage(f"Loaded {len(bursts)} burst(s) from {path.name}", 4000)
 
     def _render_timeline(self) -> None:
@@ -786,6 +891,7 @@ class AnalyzerMainWindow(QMainWindow):
             self.waterfall_image.setImage(canvas, autoLevels=False)
             self.waterfall_image.setRect(0.0, 0.0, float(WATERFALL_BINS), 1.0)
             self.waterfall_cursor.setValue(0.0)
+            self.waterfall_selection_region.hide()
             return
 
         canvas = np.vstack(self._waterfall_rows)
@@ -794,6 +900,7 @@ class AnalyzerMainWindow(QMainWindow):
         self.waterfall_plot.setLimits(xMin=0, xMax=WATERFALL_BINS, yMin=0, yMax=canvas.shape[0])
         self.waterfall_plot.setRange(xRange=(0, WATERFALL_BINS), yRange=(0, canvas.shape[0]), padding=0.0)
         self.waterfall_cursor.setValue(float(self._current_index if self._current_index >= 0 else 0))
+        self._update_selection_ui()
 
     def _render_waveform(self, burst: BurstData | None) -> None:
         if burst is None or not burst.timings:
@@ -1033,6 +1140,7 @@ class AnalyzerMainWindow(QMainWindow):
             self.rssi_value.setText("-")
             self.decode_value.setText("-")
             self._render_waveform(None)
+            self._update_selection_ui()
             return
 
         self.playback_value.setText(
@@ -1053,6 +1161,70 @@ class AnalyzerMainWindow(QMainWindow):
             row_min = max(0, self._current_index - 24)
             row_max = min(len(self._bursts), self._current_index + 24)
             self.waterfall_plot.setYRange(float(row_min), float(max(row_max, row_min + 1)), padding=0.0)
+        self._update_selection_ui()
+
+    def _selection_range(self) -> tuple[int, int]:
+        if not self._bursts:
+            return (-1, -1)
+        if self._selection_start < 0 or self._selection_end < 0:
+            return (self._current_index, self._current_index)
+        start = max(0, min(self._selection_start, self._selection_end))
+        end = min(len(self._bursts) - 1, max(self._selection_start, self._selection_end))
+        return (start, end)
+
+    def _selected_bursts(self) -> list[tuple[int, BurstData]]:
+        start, end = self._selection_range()
+        if start < 0 or end < 0:
+            return []
+        return [(index, self._bursts[index]) for index in range(start, end + 1)]
+
+    def _set_selection(self, start: int, end: int, *, sync_current: bool) -> None:
+        if not self._bursts:
+            self._selection_start = -1
+            self._selection_end = -1
+            self._update_selection_ui()
+            return
+        self._selection_start = max(0, min(start, len(self._bursts) - 1))
+        self._selection_end = max(0, min(end, len(self._bursts) - 1))
+        if sync_current:
+            self._current_index = min(self._selection_start, self._selection_end)
+            self._show_current_burst()
+            return
+        self._update_selection_ui()
+
+    def _update_selection_ui(self) -> None:
+        selected = self._selected_bursts()
+        if not selected:
+            self.selection_value.setText("-")
+            self.save_selection_button.setEnabled(False)
+            self.replay_selection_button.setEnabled(False)
+            self.waterfall_selection_region.hide()
+            return
+
+        start, end = self._selection_range()
+        first_burst = selected[0][1]
+        last_burst = selected[-1][1]
+        if start == end:
+            text = f"Burst {first_burst.burst} (1 selected)"
+        else:
+            text = f"Bursts {first_burst.burst}-{last_burst.burst} ({len(selected)} selected)"
+        self.selection_value.setText(text)
+        self.save_selection_button.setEnabled(True)
+        self.replay_selection_button.setEnabled(self._remote_serial is not None)
+        self.waterfall_selection_region.setRegion((float(start), float(end + 1)))
+        self.waterfall_selection_region.show()
+
+    def _on_waterfall_drag_selection(self, start_row: float, end_row: float, finished: bool) -> None:
+        if not self._bursts:
+            return
+        start = int(max(0, min(len(self._bursts) - 1, math.floor(min(start_row, end_row)))))
+        end = int(max(0, min(len(self._bursts) - 1, math.floor(max(start_row, end_row)))))
+        self._selection_start = start
+        self._selection_end = end
+        if finished:
+            self._set_selection(start, end, sync_current=True)
+        else:
+            self._update_selection_ui()
 
     def _update_timeline_cursor(self) -> None:
         burst = self._current_burst()
@@ -1076,6 +1248,9 @@ class AnalyzerMainWindow(QMainWindow):
         if not self._bursts:
             return
         self._current_index = max(0, self._current_index - 1)
+        if self._selection_start == self._selection_end:
+            self._selection_start = self._current_index
+            self._selection_end = self._current_index
         self._show_current_burst()
         self._play_current_audio_if_needed()
 
@@ -1083,6 +1258,9 @@ class AnalyzerMainWindow(QMainWindow):
         if not self._bursts:
             return
         self._current_index = min(len(self._bursts) - 1, self._current_index + 1)
+        if self._selection_start == self._selection_end:
+            self._selection_start = self._current_index
+            self._selection_end = self._current_index
         self._show_current_burst()
         self._play_current_audio_if_needed()
 
@@ -1208,6 +1386,221 @@ class AnalyzerMainWindow(QMainWindow):
 
         self.statusBar().showMessage(f"Exported decoded bursts to {output_path.name}", 4000)
 
+    def _save_selected_bursts(self) -> None:
+        selected = self._selected_bursts()
+        if not selected:
+            QMessageBox.information(self, APP_NAME, "Select one or more bursts first.")
+            return
+
+        start, end = self._selection_range()
+        default_stem = self._recording_path.stem if self._recording_path is not None else "fliprsdr_selection"
+        default_name = f"{default_stem}_bursts_{start + 1:03d}_{end + 1:03d}.fliprsdr"
+        default_dir = str(self._recording_path.parent) if self._recording_path is not None else str(Path.cwd())
+        selected_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save selected bursts",
+            str(Path(default_dir) / default_name),
+            "FlipRSDR Binary (*.fliprsdr);;JSON Lines (*.jsonl);;All Files (*)",
+        )
+        if not selected_path:
+            return
+
+        output_path = Path(selected_path)
+        try:
+            if output_path.suffix.lower() == ".jsonl":
+                with output_path.open("w", encoding="utf-8") as handle:
+                    for _index, burst in selected:
+                        handle.write(
+                            json.dumps(self._burst_to_capture_dict(burst), separators=(",", ":")) + "\n"
+                        )
+            else:
+                payload = bytearray()
+                for _index, burst in selected:
+                    payload.extend(encode_recording_burst(self._burst_to_capture_dict(burst)))
+                output_path.write_bytes(bytes(payload))
+        except OSError as exc:
+            QMessageBox.critical(self, APP_NAME, f"Unable to save selection:\n{exc}")
+            return
+
+        self.statusBar().showMessage(f"Saved {len(selected)} selected burst(s) to {output_path.name}", 4000)
+
+    def _burst_to_capture_dict(self, burst: BurstData) -> dict[str, object]:
+        message: dict[str, object] = {
+            "type": "burst_capture",
+            "session": burst.session,
+            "burst": burst.burst,
+            "freq": burst.frequency_hz,
+            "first_level": 1 if burst.first_level else 0,
+            "timings": list(burst.timings),
+            "count": burst.timing_count,
+            "truncated": burst.truncated,
+        }
+        if burst.timestamp is not None:
+            message["timestamp"] = burst.timestamp
+        if burst.rssi is not None:
+            message["rssi"] = burst.rssi
+        return message
+
+    def _refresh_ports(self) -> None:
+        preferred_port = self.port_combo.currentText().strip()
+        if not preferred_port:
+            preferred_port = str(self._settings.value("remote/last_port", "", type=str)).strip()
+
+        current_port = self.port_combo.currentText().strip()
+        ports = [port.device for port in serial.tools.list_ports.comports()]
+        self.port_combo.clear()
+        self.port_combo.addItems(ports)
+        if preferred_port and preferred_port in ports:
+            self.port_combo.setCurrentText(preferred_port)
+        elif current_port and current_port in ports:
+            self.port_combo.setCurrentText(current_port)
+        elif ports:
+            self.port_combo.setCurrentIndex(0)
+
+    def _set_remote_status(self, text: str, *, ok: bool) -> None:
+        self.remote_status_value.setText(text)
+        self.remote_status_value.setStyleSheet(f"color: {'#7CFC98' if ok else '#ff9c74'};")
+
+    def _update_remote_ui(self) -> None:
+        connected = self._remote_serial is not None
+        self.remote_connect_button.setText("Disconnect Flipper" if connected else "Connect Flipper")
+        self.port_combo.setEnabled(not connected)
+        self.refresh_ports_button.setEnabled(not connected)
+        self.remote_baud_combo.setEnabled(not connected)
+        self.replay_selection_button.setEnabled(connected and bool(self._selected_bursts()))
+        if connected:
+            port_name = self.port_combo.currentText().strip()
+            self._set_remote_status(f"Connected to {port_name}", ok=True)
+        else:
+            self._set_remote_status("Flipper disconnected", ok=False)
+
+    def _toggle_remote_connection(self) -> None:
+        if self._remote_serial is None:
+            self._connect_remote()
+        else:
+            self._disconnect_remote()
+
+    def _connect_remote(self) -> None:
+        port_name = self.port_combo.currentText().strip()
+        if not port_name:
+            QMessageBox.warning(self, APP_NAME, "Select a serial port first.")
+            return
+
+        baud_text = self.remote_baud_combo.currentText().strip()
+        try:
+            baud_rate = int(baud_text)
+        except ValueError:
+            QMessageBox.warning(self, APP_NAME, f"Invalid baud rate: {baud_text}")
+            return
+
+        try:
+            self._remote_serial = serial.Serial(port_name, baud_rate, timeout=0.2, write_timeout=1.0)
+            try:
+                self._remote_serial.dtr = True
+                self._remote_serial.rts = True
+            except serial.SerialException:
+                pass
+            self._remote_serial.reset_input_buffer()
+            self._settings.setValue("remote/last_port", port_name)
+            self._settings.setValue("remote/baud_rate", str(baud_rate))
+        except serial.SerialException as exc:
+            self._remote_serial = None
+            QMessageBox.critical(self, APP_NAME, f"Unable to open {port_name}:\n{exc}")
+            return
+
+        self._update_remote_ui()
+        self.statusBar().showMessage(f"Connected to Flipper on {port_name}", 3000)
+
+    def _disconnect_remote(self) -> None:
+        if self._remote_serial is not None:
+            try:
+                self._remote_serial.close()
+            except serial.SerialException:
+                pass
+            self._remote_serial = None
+        self._update_remote_ui()
+
+    def _on_remote_port_changed(self, port_name: str) -> None:
+        if port_name.strip():
+            self._settings.setValue("remote/last_port", port_name.strip())
+
+    def _on_remote_baud_changed(self, baud_rate: str) -> None:
+        if baud_rate.strip():
+            self._settings.setValue("remote/baud_rate", baud_rate.strip())
+
+    def _validate_replayable_bursts(self, bursts: Iterable[tuple[int, BurstData]]) -> str | None:
+        for index, burst in bursts:
+            if burst.truncated or burst.timing_count != len(burst.timings):
+                return f"Burst {index + 1} is incomplete and cannot be replayed faithfully."
+            if not burst.timings:
+                return f"Burst {index + 1} has no stored timings to replay."
+            if len(burst.timings) > MAX_AUDIO_TIMINGS:
+                return f"Burst {index + 1} exceeds the Flipper replay buffer ({len(burst.timings)} timings)."
+            if burst.frequency_hz <= 0:
+                return f"Burst {index + 1} is missing a valid frequency."
+        return None
+
+    def _selection_replay_batches(self) -> list[tuple[list[str], float]]:
+        selected = self._selected_bursts()
+        validation_error = self._validate_replayable_bursts(selected)
+        if validation_error is not None:
+            raise ValueError(validation_error)
+
+        batches: list[tuple[list[str], float]] = []
+        for position, (_index, burst) in enumerate(selected):
+            commands = list(
+                build_replay_commands(
+                    burst.frequency_hz,
+                    burst.first_level,
+                    burst.timings,
+                )
+            )
+            delay_s = max(0.15, burst.total_duration_us / 1_000_000.0)
+            if position + 1 < len(selected):
+                next_burst = selected[position + 1][1]
+                if burst.timestamp is not None and next_burst.timestamp is not None:
+                    gap_ms = max(
+                        0,
+                        int(next_burst.timestamp - burst.timestamp - round(burst.total_duration_us / 1000.0)),
+                    )
+                    delay_s += gap_ms / 1000.0
+            batches.append((commands, delay_s))
+        return batches
+
+    def _replay_selected_bursts(self) -> None:
+        if self._remote_serial is None:
+            QMessageBox.warning(self, APP_NAME, "Connect to the Flipper before replaying a selection.")
+            return
+
+        selected = self._selected_bursts()
+        if not selected:
+            QMessageBox.information(self, APP_NAME, "Select one or more bursts first.")
+            return
+
+        try:
+            batches = self._selection_replay_batches()
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            for batch_index, (commands, delay_s) in enumerate(batches):
+                for command in commands:
+                    self._remote_serial.write(f"{command}\n".encode("utf-8"))
+                self._remote_serial.flush()
+                if batch_index + 1 < len(batches):
+                    QApplication.processEvents()
+                    time.sleep(delay_s)
+        except (ValueError, serial.SerialException, serial.SerialTimeoutException) as exc:
+            QMessageBox.critical(self, APP_NAME, f"Unable to replay selection:\n{exc}")
+            if isinstance(exc, serial.SerialException):
+                self._disconnect_remote()
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        start, end = self._selection_range()
+        self.statusBar().showMessage(
+            f"Sent burst selection {start + 1}-{end + 1} to the Flipper for replay",
+            4000,
+        )
+
     def _advance_playback(self) -> None:
         if not self._bursts:
             self._stop_playback()
@@ -1310,11 +1703,18 @@ class AnalyzerMainWindow(QMainWindow):
         self.audio_checkbox.setChecked(saved_audio)
         saved_view = str(self._settings.value("view/mode", "Waveform", type=str))
         self.view_combo.setCurrentText(saved_view if saved_view in {"Waveform", "Waterfall"} else "Waveform")
+        saved_baud = str(
+            self._settings.value("remote/baud_rate", str(DEFAULT_REMOTE_BAUD_RATE), type=str)
+        ).strip()
+        if saved_baud:
+            self.remote_baud_combo.setCurrentText(saved_baud)
 
     def _save_ui_settings(self) -> None:
         self._settings.setValue("playback/speed", self._playback_speed)
         self._settings.setValue("audio/enabled", self.audio_checkbox.isChecked())
         self._settings.setValue("view/mode", self.view_combo.currentText())
+        self._settings.setValue("remote/last_port", self.port_combo.currentText().strip())
+        self._settings.setValue("remote/baud_rate", self.remote_baud_combo.currentText().strip())
 
 
 def main() -> int:

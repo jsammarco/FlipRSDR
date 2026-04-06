@@ -31,6 +31,8 @@ struct FlipRSDRCapture {
     bool overflow_seen;
     FlipRSDRBurstBuffer working;
     FlipRSDRBurstBuffer buffered;
+    FlipRSDRBurstBuffer replay;
+    uint32_t replay_next_index;
     uint32_t live_chunk[FLIPRSDR_PROTOCOL_CHUNK_TIMINGS];
     uint16_t live_chunk_count;
 };
@@ -194,6 +196,24 @@ static void fliprsdr_capture_rx_callback(bool level, uint32_t duration, void* co
     }
 }
 
+static LevelDuration fliprsdr_capture_replay_callback(void* context) {
+    FlipRSDRCapture* capture = context;
+    furi_assert(capture);
+
+    if(capture->replay_next_index == 0U && capture->replay.valid && !capture->replay.first_level) {
+        capture->replay_next_index = 1U;
+    }
+
+    if(!capture->replay.valid || capture->replay_next_index >= capture->replay.stored_count) {
+        return level_duration_reset();
+    }
+
+    const uint32_t timing_index = capture->replay_next_index++;
+    const bool level = capture->replay.first_level ? ((timing_index % 2U) == 0U) :
+                                                   ((timing_index % 2U) != 0U);
+    return level_duration_make(level, capture->replay.timings[timing_index]);
+}
+
 static int32_t fliprsdr_capture_worker(void* context) {
     FlipRSDRCapture* capture = context;
     LevelDuration level_duration;
@@ -265,6 +285,8 @@ FlipRSDRCapture* fliprsdr_capture_alloc(FlipRSDRTransport* transport) {
     capture->overflow_seen = false;
     fliprsdr_burst_buffer_reset(&capture->working);
     fliprsdr_burst_buffer_reset(&capture->buffered);
+    fliprsdr_burst_buffer_reset(&capture->replay);
+    capture->replay_next_index = 0U;
     capture->live_chunk_count = 0U;
     return capture;
 }
@@ -397,6 +419,134 @@ bool fliprsdr_capture_send_debug_burst(FlipRSDRCapture* capture) {
         capture->session_id + 1U,
         1U,
         fliprsdr_capture_frequency_hz(capture));
+}
+
+bool fliprsdr_capture_prepare_replay(
+    FlipRSDRCapture* capture,
+    uint32_t frequency_hz,
+    bool first_level,
+    uint32_t total_count) {
+    furi_assert(capture);
+
+    if(total_count == 0U || total_count > FLIPRSDR_BURST_TIMINGS_CAPACITY) {
+        return false;
+    }
+
+    furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
+    fliprsdr_burst_buffer_start(&capture->replay, 0U, 0U, frequency_hz, 0U, first_level);
+    capture->replay.total_count = total_count;
+    capture->replay.stored_count = 0U;
+    capture->replay.complete = false;
+    capture->replay_next_index = 0U;
+    furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
+    return true;
+}
+
+bool fliprsdr_capture_append_replay_timings(
+    FlipRSDRCapture* capture,
+    uint32_t offset,
+    const uint32_t* timings,
+    uint16_t timing_count) {
+    furi_assert(capture);
+    furi_assert(timings || (timing_count == 0U));
+
+    bool ok = false;
+    furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
+
+    if(capture->replay.valid && offset == capture->replay.stored_count &&
+       (capture->replay.stored_count + timing_count) <= capture->replay.total_count &&
+       capture->replay.total_count <= FLIPRSDR_BURST_TIMINGS_CAPACITY) {
+        ok = true;
+        for(uint16_t i = 0; i < timing_count; i++) {
+            const uint32_t duration = timings[i];
+            if(duration == 0U) {
+                ok = false;
+                break;
+            }
+            capture->replay.timings[capture->replay.stored_count++] = duration;
+        }
+    }
+
+    if(!ok) {
+        fliprsdr_burst_buffer_reset(&capture->replay);
+        capture->replay_next_index = 0U;
+    }
+
+    furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
+    return ok;
+}
+
+void fliprsdr_capture_cancel_replay(FlipRSDRCapture* capture) {
+    furi_assert(capture);
+    furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
+    fliprsdr_burst_buffer_reset(&capture->replay);
+    capture->replay_next_index = 0U;
+    furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
+}
+
+bool fliprsdr_capture_replay(FlipRSDRCapture* capture) {
+    furi_assert(capture);
+    fliprsdr_capture_cleanup_worker(capture);
+
+    FlipRSDRBurstBuffer replay = {0};
+    furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
+    replay = capture->replay;
+    capture->replay_next_index = 0U;
+    furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
+
+    if(!replay.valid || replay.stored_count == 0U || replay.stored_count != replay.total_count) {
+        return false;
+    }
+
+    if(capture->running) {
+        fliprsdr_capture_stop(capture);
+        fliprsdr_capture_cleanup_worker(capture);
+    }
+
+    bool opened_here = false;
+    if(!fliprsdr_radio_device(&capture->radio)) {
+        if(!fliprsdr_radio_open(&capture->radio, &capture->settings)) {
+            return false;
+        }
+        opened_here = true;
+    }
+
+    if(!fliprsdr_radio_is_frequency_valid(&capture->radio, replay.frequency_hz)) {
+        if(opened_here) {
+            fliprsdr_radio_close(&capture->radio);
+        }
+        return false;
+    }
+
+    fliprsdr_radio_reset(&capture->radio);
+    fliprsdr_radio_idle(&capture->radio);
+    fliprsdr_radio_load_preset(&capture->radio, FuriHalSubGhzPresetOok270Async);
+    fliprsdr_radio_set_frequency(&capture->radio, replay.frequency_hz);
+
+    furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
+    capture->replay = replay;
+    capture->replay_next_index = 0U;
+    furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
+
+    bool ok = false;
+    if(fliprsdr_radio_set_tx(&capture->radio)) {
+        ok = fliprsdr_radio_start_async_tx(
+            &capture->radio, fliprsdr_capture_replay_callback, capture);
+    }
+
+    if(ok) {
+        while(!fliprsdr_radio_is_async_tx_complete(&capture->radio)) {
+            furi_delay_ms(5);
+        }
+        fliprsdr_radio_stop_async_tx(&capture->radio);
+    }
+
+    fliprsdr_radio_idle(&capture->radio);
+    if(opened_here) {
+        fliprsdr_radio_close(&capture->radio);
+    }
+
+    return ok;
 }
 
 void fliprsdr_capture_copy_snapshot(

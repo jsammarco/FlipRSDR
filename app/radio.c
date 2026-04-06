@@ -233,6 +233,14 @@ void fliprsdr_radio_set_rx(const FlipRSDRRadio* radio) {
     }
 }
 
+bool fliprsdr_radio_set_tx(const FlipRSDRRadio* radio) {
+    furi_assert(radio);
+    if(radio->external_selected && radio->device) {
+        return subghz_devices_set_tx(radio->device);
+    }
+    return furi_hal_subghz_tx();
+}
+
 void fliprsdr_radio_idle(const FlipRSDRRadio* radio) {
     furi_assert(radio);
     if(radio->external_selected && radio->device) {
@@ -267,6 +275,31 @@ void fliprsdr_radio_stop_async_rx(const FlipRSDRRadio* radio) {
         subghz_devices_stop_async_rx(radio->device);
     } else {
         furi_hal_subghz_stop_async_rx();
+    }
+}
+
+bool fliprsdr_radio_start_async_tx(const FlipRSDRRadio* radio, void* callback, void* context) {
+    furi_assert(radio);
+    if(radio->external_selected && radio->device) {
+        return subghz_devices_start_async_tx(radio->device, callback, context);
+    }
+    return furi_hal_subghz_start_async_tx((FuriHalSubGhzAsyncTxCallback)callback, context);
+}
+
+bool fliprsdr_radio_is_async_tx_complete(const FlipRSDRRadio* radio) {
+    furi_assert(radio);
+    if(radio->external_selected && radio->device) {
+        return subghz_devices_is_async_complete_tx(radio->device);
+    }
+    return furi_hal_subghz_is_async_tx_complete();
+}
+
+void fliprsdr_radio_stop_async_tx(const FlipRSDRRadio* radio) {
+    furi_assert(radio);
+    if(radio->external_selected && radio->device) {
+        subghz_devices_stop_async_tx(radio->device);
+    } else {
+        furi_hal_subghz_stop_async_tx();
     }
 }
 

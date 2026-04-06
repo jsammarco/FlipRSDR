@@ -1,6 +1,7 @@
 #include "fliprsdr_app.h"
 
 #include <ctype.h>
+#include <stdlib.h>
 #include <string.h>
 
 static bool fliprsdr_app_command_is_word(const char* value, const char* word) {
@@ -19,6 +20,104 @@ static const char* fliprsdr_app_command_skip_delimiters(const char* text) {
         text++;
     }
     return text;
+}
+
+static bool fliprsdr_app_parse_u32(const char* text, uint32_t* value) {
+    char* end = NULL;
+    unsigned long parsed = strtoul(text, &end, 10);
+    if(!text[0] || !end || *end != '\0' || parsed > UINT32_MAX) {
+        return false;
+    }
+    *value = (uint32_t)parsed;
+    return true;
+}
+
+static bool fliprsdr_app_parse_bool01(const char* text, bool* value) {
+    uint32_t parsed = 0U;
+    if(!fliprsdr_app_parse_u32(text, &parsed) || parsed > 1U) {
+        return false;
+    }
+    *value = parsed != 0U;
+    return true;
+}
+
+static bool fliprsdr_app_parse_replay_begin(FlipRSDRApp* app, char* argument) {
+    char* frequency_text = argument;
+    char* first_level_text = NULL;
+    char* count_text = NULL;
+
+    while(*argument && *argument != ' ' && *argument != '\t' && *argument != '=') {
+        argument++;
+    }
+    if(*argument) {
+        *argument++ = '\0';
+        first_level_text = argument = (char*)fliprsdr_app_command_skip_delimiters(argument);
+    }
+
+    while(*argument && *argument != ' ' && *argument != '\t' && *argument != '=') {
+        argument++;
+    }
+    if(*argument) {
+        *argument++ = '\0';
+        count_text = (char*)fliprsdr_app_command_skip_delimiters(argument);
+    }
+
+    if(!frequency_text[0] || !first_level_text || !count_text || !count_text[0]) {
+        return false;
+    }
+
+    uint32_t frequency_hz = 0U;
+    uint32_t total_count = 0U;
+    bool first_level = false;
+    if(!fliprsdr_app_parse_u32(frequency_text, &frequency_hz) ||
+       !fliprsdr_app_parse_bool01(first_level_text, &first_level) ||
+       !fliprsdr_app_parse_u32(count_text, &total_count)) {
+        return false;
+    }
+
+    return fliprsdr_capture_prepare_replay(app->capture, frequency_hz, first_level, total_count);
+}
+
+static bool fliprsdr_app_parse_replay_chunk(FlipRSDRApp* app, char* argument) {
+    uint32_t timings[96];
+    uint16_t timing_count = 0U;
+    char* offset_text = argument;
+    char* timings_text = NULL;
+
+    while(*argument && *argument != ' ' && *argument != '\t' && *argument != '=') {
+        argument++;
+    }
+    if(*argument) {
+        *argument++ = '\0';
+        timings_text = (char*)fliprsdr_app_command_skip_delimiters(argument);
+    }
+
+    if(!offset_text[0] || !timings_text || !timings_text[0]) {
+        return false;
+    }
+
+    uint32_t offset = 0U;
+    if(!fliprsdr_app_parse_u32(offset_text, &offset)) {
+        return false;
+    }
+
+    char* cursor = timings_text;
+    while(*cursor) {
+        char* next = cursor;
+        while(*next && *next != ',') {
+            next++;
+        }
+        if(*next == ',') {
+            *next++ = '\0';
+        }
+        if(timing_count >= COUNT_OF(timings) || !fliprsdr_app_parse_u32(cursor, &timings[timing_count])) {
+            return false;
+        }
+        timing_count++;
+        cursor = next;
+    }
+
+    return fliprsdr_capture_append_replay_timings(app->capture, offset, timings, timing_count);
 }
 
 static bool fliprsdr_app_handle_command_line(FlipRSDRApp* app, const char* line) {
@@ -100,6 +199,34 @@ static bool fliprsdr_app_handle_command_line(FlipRSDRApp* app, const char* line)
 
         fliprsdr_settings_validate(&app->settings);
         fliprsdr_app_apply_settings(app, false);
+        return true;
+    }
+
+    if(fliprsdr_app_command_is_word(command, "replay_begin")) {
+        return argument[0] ? fliprsdr_app_parse_replay_begin(app, argument) : false;
+    }
+
+    if(fliprsdr_app_command_is_word(command, "replay_chunk")) {
+        return argument[0] ? fliprsdr_app_parse_replay_chunk(app, argument) : false;
+    }
+
+    if(fliprsdr_app_command_is_word(command, "replay_commit")) {
+        const bool ok = fliprsdr_capture_replay(app->capture);
+        fliprsdr_app_refresh_capture_view(app);
+        return ok;
+    }
+
+    if(fliprsdr_app_command_is_word(command, "replay_cancel")) {
+        fliprsdr_capture_cancel_replay(app->capture);
+        return true;
+    }
+
+    if(fliprsdr_app_command_is_word(command, "replay_wait")) {
+        uint32_t wait_ms = 0U;
+        if(!argument[0] || !fliprsdr_app_parse_u32(argument, &wait_ms)) {
+            return false;
+        }
+        furi_delay_ms(wait_ms);
         return true;
     }
 
@@ -227,7 +354,8 @@ static FlipRSDRApp* fliprsdr_app_alloc(void) {
     app->capture = fliprsdr_capture_alloc(app->transport);
     app->settings_dirty = false;
     app->transport_dirty = false;
-    app->command_queue = furi_message_queue_alloc(8U, sizeof(FlipRSDRCommandMessage));
+    app->command_queue =
+        furi_message_queue_alloc(FLIPRSDR_COMMAND_QUEUE_DEPTH, sizeof(FlipRSDRCommandMessage));
 
     fliprsdr_settings_load(&app->settings);
     fliprsdr_app_apply_settings(app, true);

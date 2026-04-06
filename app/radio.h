@@ -43,10 +43,14 @@ void fliprsdr_radio_reset(const FlipRSDRRadio* radio);
 void fliprsdr_radio_load_preset(const FlipRSDRRadio* radio, FuriHalSubGhzPreset preset);
 uint32_t fliprsdr_radio_set_frequency(const FlipRSDRRadio* radio, uint32_t frequency);
 void fliprsdr_radio_set_rx(const FlipRSDRRadio* radio);
+bool fliprsdr_radio_set_tx(const FlipRSDRRadio* radio);
 void fliprsdr_radio_idle(const FlipRSDRRadio* radio);
 void fliprsdr_radio_sleep(const FlipRSDRRadio* radio);
 void fliprsdr_radio_start_async_rx(const FlipRSDRRadio* radio, void* callback, void* context);
 void fliprsdr_radio_stop_async_rx(const FlipRSDRRadio* radio);
+bool fliprsdr_radio_start_async_tx(const FlipRSDRRadio* radio, void* callback, void* context);
+bool fliprsdr_radio_is_async_tx_complete(const FlipRSDRRadio* radio);
+void fliprsdr_radio_stop_async_tx(const FlipRSDRRadio* radio);
 float fliprsdr_radio_get_rssi(const FlipRSDRRadio* radio);
 void fliprsdr_radio_set_audio_mirror(const FlipRSDRRadio* radio, bool enabled);
 
