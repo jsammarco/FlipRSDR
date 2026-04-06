@@ -17,6 +17,7 @@
 struct FlipRSDRPreviewView {
     View* view;
     FuriTimer* timer;
+    FuriMutex* radio_mutex;
     FlipRSDRRadio radio;
     bool charge_suppressed;
     bool async_rx_running;
@@ -191,6 +192,7 @@ static void fliprsdr_preview_start(FlipRSDRPreviewView* preview_view) {
         { settings = model->settings; },
         false);
 
+    furi_check(furi_mutex_acquire(preview_view->radio_mutex, FuriWaitForever) == FuriStatusOk);
     const bool radio_ready = fliprsdr_radio_open(&preview_view->radio, &settings);
     const SubGhzDevice* radio_device = fliprsdr_radio_device(&preview_view->radio);
     preview_view->charge_suppressed = false;
@@ -223,9 +225,11 @@ static void fliprsdr_preview_start(FlipRSDRPreviewView* preview_view) {
         furi_timer_start(
             preview_view->timer, furi_kernel_get_tick_frequency() / FLIPRSDR_PREVIEW_TIMER_HZ);
     }
+    furi_check(furi_mutex_release(preview_view->radio_mutex) == FuriStatusOk);
 }
 
 static void fliprsdr_preview_stop(FlipRSDRPreviewView* preview_view) {
+    furi_check(furi_mutex_acquire(preview_view->radio_mutex, FuriWaitForever) == FuriStatusOk);
     furi_timer_stop(preview_view->timer);
     fliprsdr_preview_stop_async_rx(preview_view);
     fliprsdr_preview_set_audio_enabled(preview_view, false);
@@ -234,6 +238,7 @@ static void fliprsdr_preview_stop(FlipRSDRPreviewView* preview_view) {
         furi_hal_power_suppress_charge_exit();
         preview_view->charge_suppressed = false;
     }
+    furi_check(furi_mutex_release(preview_view->radio_mutex) == FuriStatusOk);
 
     with_view_model(
         preview_view->view,
@@ -281,7 +286,6 @@ static void fliprsdr_preview_draw(Canvas* canvas, void* model_ptr) {
     char buffer[32];
     const char* module_status = model->external_active ? "EXT" :
                                 (model->external_requested ? "EXT?" : "INT");
-    const char* radio_status = fliprsdr_radio_open_status_label(model->radio_status);
     canvas_clear(canvas);
 
     canvas_set_font(canvas, FontPrimary);
@@ -297,25 +301,13 @@ static void fliprsdr_preview_draw(Canvas* canvas, void* model_ptr) {
         (unsigned long)((model->center_frequency_hz % 1000000UL) / 1000UL));
     canvas_draw_str(canvas, 2, 20, buffer);
 
-    snprintf(
-        buffer,
-        sizeof(buffer),
-        "%s %s",
-        model->external_requested ? "GDO0" : "Span",
-        model->external_requested ? model->data_pin_label : "");
-    if(model->external_requested) {
-        canvas_draw_str_aligned(canvas, 126, 20, AlignRight, AlignBottom, buffer);
-    } else {
-        snprintf(buffer, sizeof(buffer), "Span %u kHz", model->settings.preview_bandwidth_khz);
-        canvas_draw_str_aligned(canvas, 126, 20, AlignRight, AlignBottom, buffer);
-    }
-    if(model->external_requested) {
-        snprintf(buffer, sizeof(buffer), "Span %u kHz", model->settings.preview_bandwidth_khz);
-        canvas_draw_str(canvas, 2, 20, buffer);
-    }
+    snprintf(buffer, sizeof(buffer), "Span %u kHz", model->settings.preview_bandwidth_khz);
+    canvas_draw_str_aligned(canvas, 126, 20, AlignRight, AlignBottom, buffer);
 
     canvas_draw_frame(canvas, 2, 23, 124, 29);
     canvas_draw_line(canvas, 2, 52, 126, 52);
+    snprintf(buffer, sizeof(buffer), "RSSI %.1f", (double)model->last_rssi);
+    canvas_draw_str(canvas, 4, 30, buffer);
 
     if(model->valid && model->active_points > 0U) {
         for(uint8_t i = 0; i < model->active_points; i++) {
@@ -331,24 +323,18 @@ static void fliprsdr_preview_draw(Canvas* canvas, void* model_ptr) {
         snprintf(
             buffer,
             sizeof(buffer),
-            "Now %lu.%03lu",
+            "%lu.%03lu",
             (unsigned long)(model->current_frequency_hz / 1000000UL),
             (unsigned long)((model->current_frequency_hz % 1000000UL) / 1000UL));
-        canvas_draw_str(canvas, 2, 61, buffer);
-
-        snprintf(buffer, sizeof(buffer), "RSSI %.1f", (double)model->last_rssi);
-        canvas_draw_str_aligned(canvas, 126, 61, AlignRight, AlignBottom, buffer);
-    } else if(model->external_requested && !model->radio_available) {
-        canvas_draw_str(canvas, 7, 35, radio_status);
-        canvas_draw_str(canvas, 7, 45, "Check power/SPI/GDO0.");
+        canvas_draw_str_aligned(canvas, 64, 61, AlignCenter, AlignBottom, buffer);
     } else if(!model->radio_available) {
-        canvas_draw_str(canvas, 7, 39, radio_status);
+        canvas_draw_str(canvas, 7, 39, "Radio unavailable.");
     } else {
         canvas_draw_str(canvas, 7, 39, "Selected frequency is out of range.");
     }
 
-    elements_button_left(canvas, "-100k");
-    elements_button_right(canvas, "+100k");
+    elements_button_left(canvas, "<");
+    elements_button_right(canvas, ">");
 }
 
 static bool fliprsdr_preview_input(InputEvent* event, void* context) {
@@ -376,37 +362,38 @@ static bool fliprsdr_preview_input(InputEvent* event, void* context) {
 static void fliprsdr_preview_tick(void* context) {
     FlipRSDRPreviewView* preview_view = context;
 
+    furi_check(furi_mutex_acquire(preview_view->radio_mutex, FuriWaitForever) == FuriStatusOk);
     with_view_model(
         preview_view->view,
         FlipRSDRPreviewViewModel * model,
         {
             if(!model->running || !model->valid || (model->active_points == 0U)) {
-                return;
-            }
+            } else {
+                const uint8_t sample_index = model->sweep_index;
+                const SubGhzDevice* radio_device = fliprsdr_radio_device(&preview_view->radio);
+                model->last_rssi = radio_device ? fliprsdr_radio_get_rssi(&preview_view->radio) :
+                                                 FLIPRSDR_PREVIEW_RSSI_MIN;
+                model->rssi[sample_index] = fliprsdr_preview_rssi_to_height(model->last_rssi);
 
-            const uint8_t sample_index = model->sweep_index;
-            const SubGhzDevice* radio_device = fliprsdr_radio_device(&preview_view->radio);
-            model->last_rssi = radio_device ? fliprsdr_radio_get_rssi(&preview_view->radio) :
-                                             FLIPRSDR_PREVIEW_RSSI_MIN;
-            model->rssi[sample_index] = fliprsdr_preview_rssi_to_height(model->last_rssi);
-
-            model->sweep_index = (sample_index + 1U) % model->active_points;
-            fliprsdr_preview_stop_async_rx(preview_view);
-            if(radio_device) {
-                fliprsdr_radio_idle(&preview_view->radio);
-            }
-            if(!fliprsdr_preview_start_rx_at(
-                   preview_view,
-                   model,
-                   fliprsdr_preview_frequency_for_index(model, model->sweep_index))) {
-                model->running = false;
-                model->valid = false;
+                model->sweep_index = (sample_index + 1U) % model->active_points;
                 fliprsdr_preview_stop_async_rx(preview_view);
-                fliprsdr_preview_set_audio_enabled(preview_view, false);
-                furi_timer_stop(preview_view->timer);
+                if(radio_device) {
+                    fliprsdr_radio_idle(&preview_view->radio);
+                }
+                if(!fliprsdr_preview_start_rx_at(
+                       preview_view,
+                       model,
+                       fliprsdr_preview_frequency_for_index(model, model->sweep_index))) {
+                    model->running = false;
+                    model->valid = false;
+                    fliprsdr_preview_stop_async_rx(preview_view);
+                    fliprsdr_preview_set_audio_enabled(preview_view, false);
+                    furi_timer_stop(preview_view->timer);
+                }
             }
         },
         true);
+    furi_check(furi_mutex_release(preview_view->radio_mutex) == FuriStatusOk);
 }
 
 static void fliprsdr_preview_enter(void* context) {
@@ -422,6 +409,7 @@ FlipRSDRPreviewView* fliprsdr_preview_view_alloc(void) {
     preview_view->view = view_alloc();
     preview_view->timer =
         furi_timer_alloc(fliprsdr_preview_tick, FuriTimerTypePeriodic, preview_view);
+    preview_view->radio_mutex = furi_mutex_alloc(FuriMutexTypeNormal);
     fliprsdr_radio_init(&preview_view->radio);
     preview_view->charge_suppressed = false;
     preview_view->async_rx_running = false;
@@ -450,6 +438,7 @@ void fliprsdr_preview_view_free(FlipRSDRPreviewView* preview_view) {
     furi_assert(preview_view);
     fliprsdr_preview_stop(preview_view);
     fliprsdr_radio_close(&preview_view->radio);
+    furi_mutex_free(preview_view->radio_mutex);
     furi_timer_free(preview_view->timer);
     view_free(preview_view->view);
     free(preview_view);
