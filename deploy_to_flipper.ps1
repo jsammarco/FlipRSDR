@@ -23,6 +23,7 @@ function Resolve-PythonCommand {
 $SourceFile = [System.IO.Path]::GetFullPath($SourceFile)
 $FirmwareDir = [System.IO.Path]::GetFullPath($FirmwareDir)
 $StorageScript = Join-Path $FirmwareDir "scripts\storage.py"
+$RunFapScript = Join-Path $FirmwareDir "scripts\runfap.py"
 
 if(!(Test-Path $SourceFile -PathType Leaf)) {
     throw "Built app was not found: $SourceFile"
@@ -34,6 +35,10 @@ if(!(Test-Path $FirmwareDir -PathType Container)) {
 
 if(!(Test-Path $StorageScript -PathType Leaf)) {
     throw "Flipper storage helper was not found: $StorageScript"
+}
+
+if(!(Test-Path $RunFapScript -PathType Leaf)) {
+    throw "Flipper app launcher was not found: $RunFapScript"
 }
 
 $destinationDir = ($DestinationDir -replace "\\", "/").Trim()
@@ -73,8 +78,21 @@ try {
     if($LASTEXITCODE -ne 0) {
         throw "Upload failed."
     }
+
+    $runArgs = @(
+        $RunFapScript,
+        "-p", $Port,
+        "--sources", $SourceFile,
+        "--targets", $destinationFile,
+        "--host-app", $destinationFile
+    )
+
+    & $pythonExe @pythonArgs @runArgs
+    if($LASTEXITCODE -ne 0) {
+        throw "App launch failed after upload."
+    }
 } finally {
     Pop-Location
 }
 
-Write-Host "Upload complete."
+Write-Host "Upload complete and app launched."

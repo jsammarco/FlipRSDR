@@ -488,13 +488,19 @@ bool fliprsdr_capture_replay(FlipRSDRCapture* capture) {
     furi_assert(capture);
     fliprsdr_capture_cleanup_worker(capture);
 
-    FlipRSDRBurstBuffer replay = {0};
+    uint32_t frequency_hz = 0U;
+    uint32_t stored_count = 0U;
+    uint32_t total_count = 0U;
+    bool replay_valid = false;
     furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
-    replay = capture->replay;
+    replay_valid = capture->replay.valid;
+    frequency_hz = capture->replay.frequency_hz;
+    stored_count = capture->replay.stored_count;
+    total_count = capture->replay.total_count;
     capture->replay_next_index = 0U;
     furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
 
-    if(!replay.valid || replay.stored_count == 0U || replay.stored_count != replay.total_count) {
+    if(!replay_valid || stored_count == 0U || stored_count != total_count) {
         return false;
     }
 
@@ -511,7 +517,7 @@ bool fliprsdr_capture_replay(FlipRSDRCapture* capture) {
         opened_here = true;
     }
 
-    if(!fliprsdr_radio_is_frequency_valid(&capture->radio, replay.frequency_hz)) {
+    if(!fliprsdr_radio_is_frequency_valid(&capture->radio, frequency_hz)) {
         if(opened_here) {
             fliprsdr_radio_close(&capture->radio);
         }
@@ -521,12 +527,7 @@ bool fliprsdr_capture_replay(FlipRSDRCapture* capture) {
     fliprsdr_radio_reset(&capture->radio);
     fliprsdr_radio_idle(&capture->radio);
     fliprsdr_radio_load_preset(&capture->radio, FuriHalSubGhzPresetOok270Async);
-    fliprsdr_radio_set_frequency(&capture->radio, replay.frequency_hz);
-
-    furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
-    capture->replay = replay;
-    capture->replay_next_index = 0U;
-    furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
+    fliprsdr_radio_set_frequency(&capture->radio, frequency_hz);
 
     bool ok = false;
     if(fliprsdr_radio_set_tx(&capture->radio)) {
