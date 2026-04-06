@@ -203,11 +203,15 @@ static bool fliprsdr_app_handle_command_line(FlipRSDRApp* app, const char* line)
     }
 
     if(fliprsdr_app_command_is_word(command, "replay_begin")) {
-        return argument[0] ? fliprsdr_app_parse_replay_begin(app, argument) : false;
+        const bool ok = argument[0] ? fliprsdr_app_parse_replay_begin(app, argument) : false;
+        fliprsdr_app_refresh_capture_view(app);
+        return ok;
     }
 
     if(fliprsdr_app_command_is_word(command, "replay_chunk")) {
-        return argument[0] ? fliprsdr_app_parse_replay_chunk(app, argument) : false;
+        const bool ok = argument[0] ? fliprsdr_app_parse_replay_chunk(app, argument) : false;
+        fliprsdr_app_refresh_capture_view(app);
+        return ok;
     }
 
     if(fliprsdr_app_command_is_word(command, "replay_commit")) {
@@ -218,6 +222,7 @@ static bool fliprsdr_app_handle_command_line(FlipRSDRApp* app, const char* line)
 
     if(fliprsdr_app_command_is_word(command, "replay_cancel")) {
         fliprsdr_capture_cancel_replay(app->capture);
+        fliprsdr_app_refresh_capture_view(app);
         return true;
     }
 

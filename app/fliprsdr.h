@@ -66,6 +66,15 @@ typedef enum {
 } FlipRSDRCaptureState;
 
 typedef enum {
+    FlipRSDRReplayStatusIdle,
+    FlipRSDRReplayStatusLoading,
+    FlipRSDRReplayStatusReady,
+    FlipRSDRReplayStatusTransmitting,
+    FlipRSDRReplayStatusDone,
+    FlipRSDRReplayStatusError,
+} FlipRSDRReplayStatus;
+
+typedef enum {
     FlipRSDRTransportStateDisconnected,
     FlipRSDRTransportStateWaiting,
     FlipRSDRTransportStateConnected,
@@ -121,6 +130,9 @@ typedef struct {
     uint32_t buffered_stored_count;
     uint32_t frequency_hz;
     float last_rssi;
+    uint8_t replay_status;
+    uint32_t replay_total_count;
+    uint32_t replay_stored_count;
 } FlipRSDRCaptureSnapshot;
 
 typedef struct {

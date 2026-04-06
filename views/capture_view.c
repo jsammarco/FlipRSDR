@@ -54,6 +54,23 @@ static const char* fliprsdr_capture_view_mode_text(uint8_t stream_mode) {
     }
 }
 
+static const char* fliprsdr_capture_view_replay_text(uint8_t replay_status) {
+    switch((FlipRSDRReplayStatus)replay_status) {
+    case FlipRSDRReplayStatusLoading:
+        return "RP Load";
+    case FlipRSDRReplayStatusReady:
+        return "RP Ready";
+    case FlipRSDRReplayStatusTransmitting:
+        return "RP TX";
+    case FlipRSDRReplayStatusDone:
+        return "RP Done";
+    case FlipRSDRReplayStatusError:
+        return "RP Err";
+    default:
+        return "RP Off";
+    }
+}
+
 static const char* fliprsdr_capture_view_link_text(const FlipRSDRTransportSnapshot* transport) {
     switch(transport->kind) {
     case FlipRSDRTransportKindUsb:
@@ -204,9 +221,16 @@ void fliprsdr_capture_view_set_snapshot(
             snprintf(
                 model->mode,
                 sizeof(model->mode),
-                "Mode %s",
-                fliprsdr_capture_view_mode_text(settings->stream_mode));
-            if(capture->in_burst) {
+                "%s %s",
+                fliprsdr_capture_view_mode_text(settings->stream_mode),
+                fliprsdr_capture_view_replay_text(capture->replay_status));
+            if(capture->replay_status == FlipRSDRReplayStatusTransmitting) {
+                snprintf(model->burst, sizeof(model->burst), "Replay TX");
+            } else if(capture->replay_status == FlipRSDRReplayStatusReady) {
+                snprintf(model->burst, sizeof(model->burst), "Replay Ready");
+            } else if(capture->replay_status == FlipRSDRReplayStatusLoading) {
+                snprintf(model->burst, sizeof(model->burst), "Replay Load");
+            } else if(capture->in_burst) {
                 snprintf(
                     model->burst,
                     sizeof(model->burst),
@@ -221,8 +245,14 @@ void fliprsdr_capture_view_set_snapshot(
                 model->count,
                 sizeof(model->count),
                 "Count %lu",
-                (unsigned long)(capture->in_burst ? capture->current_total_count :
-                                                   capture->buffered_total_count));
+                (unsigned long)(
+                    (capture->replay_status == FlipRSDRReplayStatusLoading ||
+                     capture->replay_status == FlipRSDRReplayStatusReady ||
+                     capture->replay_status == FlipRSDRReplayStatusTransmitting ||
+                     capture->replay_status == FlipRSDRReplayStatusDone) ?
+                        capture->replay_stored_count :
+                        (capture->in_burst ? capture->current_total_count :
+                                             capture->buffered_total_count)));
             snprintf(model->rssi, sizeof(model->rssi), "RSSI %.1f", (double)capture->last_rssi);
             snprintf(
                 model->flags,
