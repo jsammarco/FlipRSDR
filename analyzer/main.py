@@ -91,6 +91,29 @@ class RecordingAnalysis:
     notes: list[str]
 
 
+@dataclass
+class DecodedFrame:
+    label: str
+    bit_string: str
+    confidence: float
+    sync_us: int | None
+    short_us: int
+    long_us: int
+    hex_preview: str
+
+    @property
+    def family_key(self) -> tuple[int, int]:
+        return (int(round(self.short_us / 50.0) * 50), int(round(self.long_us / 50.0) * 50))
+
+    def format_text(self) -> str:
+        sync_text = f"Sync {self.sync_us} us, " if self.sync_us is not None else ""
+        return (
+            f"{self.label}. {sync_text}"
+            f"symbols ~{self.short_us}/{self.long_us} us, {len(self.bit_string)} bits. "
+            f"Bits: {self.bit_string[:96]} Hex: {self.hex_preview} (confidence {self.confidence:.0%})"
+        )
+
+
 def load_recording(path: Path) -> list[BurstData]:
     suffix = path.suffix.lower()
     if suffix == ".fliprsdr":
@@ -231,7 +254,93 @@ def _classify_duration(value: int, short_us: int, long_us: int, tolerance: float
     return "S" if short_error <= long_error else "L"
 
 
-def _decode_sync_pair_frame(timings: list[int]) -> str | None:
+def _valid_symbol_pair(first_kind: str, second_kind: str) -> str | None:
+    if first_kind == "S" and second_kind == "L":
+        return "0"
+    if first_kind == "L" and second_kind == "S":
+        return "1"
+    return None
+
+
+def _parse_symbol_pairs(values: list[int], short_us: int, long_us: int) -> tuple[str, float, int]:
+    bits: list[str] = []
+    decoded_pairs = 0
+    skipped_values = 0
+    index = 0
+    glitch_threshold = max(80, int(short_us * 0.45))
+
+    while index + 1 < len(values):
+        first_kind = _classify_duration(values[index], short_us, long_us)
+        second_kind = _classify_duration(values[index + 1], short_us, long_us)
+        bit = _valid_symbol_pair(first_kind, second_kind)
+        if bit is not None:
+            bits.append(bit)
+            decoded_pairs += 1
+            index += 2
+            continue
+
+        next_bit = None
+        if index + 2 < len(values):
+            next_first = _classify_duration(values[index + 1], short_us, long_us)
+            next_second = _classify_duration(values[index + 2], short_us, long_us)
+            next_bit = _valid_symbol_pair(next_first, next_second)
+
+        if next_bit is not None and (
+            values[index] <= glitch_threshold or first_kind == "?"
+        ):
+            skipped_values += 1
+            index += 1
+            continue
+
+        if first_kind in {"S", "L"} and second_kind in {"S", "L"}:
+            bits.append("?")
+            index += 2
+            continue
+
+        skipped_values += 1
+        index += 1
+
+    confidence = decoded_pairs / max(len(bits), 1)
+    return "".join(bits), confidence, skipped_values
+
+
+def _bit_string_to_hex(bit_string: str) -> str:
+    padded = "".join(bit if bit in {"0", "1"} else "0" for bit in bit_string)
+    hex_groups = [
+        f"{int(padded[index : index + 4], 2):X}"
+        for index in range(0, len(padded) - (len(padded) % 4), 4)
+    ]
+    return "".join(hex_groups[:16]) if hex_groups else "n/a"
+
+
+def _build_decoded_frame(
+    *,
+    label: str,
+    bit_string: str,
+    confidence: float,
+    sync_us: int | None,
+    short_us: int,
+    long_us: int,
+) -> DecodedFrame:
+    return DecodedFrame(
+        label=label,
+        bit_string=bit_string,
+        confidence=confidence,
+        sync_us=sync_us,
+        short_us=short_us,
+        long_us=long_us,
+        hex_preview=_bit_string_to_hex(bit_string),
+    )
+
+
+def decode_burst_details(burst: BurstData) -> DecodedFrame | None:
+    timings = [value for value in burst.timings if value > 0]
+    if len(timings) < 8:
+        return None
+    return _decode_sync_pair_frame(timings)
+
+
+def _decode_sync_pair_frame(timings: list[int]) -> DecodedFrame | None:
     positive = [value for value in timings if value > 0]
     if len(positive) < 20:
         return None
@@ -251,44 +360,45 @@ def _decode_sync_pair_frame(timings: list[int]) -> str | None:
         return None
 
     sync_threshold = max(int(long_us * 4.0), 3000)
-    sync_index = next((index for index, value in enumerate(timings) if value >= sync_threshold), None)
-    if sync_index is None or sync_index >= len(timings) - 4:
+    sync_candidates = [
+        index for index, value in enumerate(timings) if sync_threshold <= value < sync_threshold * 4
+    ]
+
+    candidate_streams: list[tuple[str, int | None, list[int]]] = []
+    for sync_index in sync_candidates[:4]:
+        payload = [value for value in timings[sync_index + 1 :] if 0 < value < sync_threshold]
+        if len(payload) >= 24:
+            candidate_streams.append(("Sync/pulse-width frame detected", timings[sync_index], payload))
+
+    leading_window = [value for value in timings if 0 < value < sync_threshold]
+    if len(leading_window) >= 24:
+        candidate_streams.append(("Pulse-width frame detected", None, leading_window))
+
+    best_result: tuple[str, float, int, int | None, str] | None = None
+    for label, sync_us, payload in candidate_streams:
+        for start_offset in range(min(6, len(payload) // 2)):
+            bit_string, confidence, skipped_values = _parse_symbol_pairs(payload[start_offset:], short_us, long_us)
+            decoded_bits = sum(1 for bit in bit_string if bit in {"0", "1"})
+            if decoded_bits < 12:
+                continue
+            score = decoded_bits * 100 - bit_string.count("?") * 30 - skipped_values * 12 - start_offset * 4
+            if best_result is None or score > best_result[2]:
+                best_result = (bit_string, confidence, score, sync_us, label)
+
+    if best_result is None:
         return None
 
-    payload = [value for value in timings[sync_index + 1 :] if 0 < value < sync_threshold]
-    pair_count = len(payload) // 2
-    if pair_count < 12:
-        return None
-
-    bits: list[str] = []
-    decoded_pairs = 0
-    for first, second in zip(payload[0::2], payload[1::2]):
-        first_kind = _classify_duration(first, short_us, long_us)
-        second_kind = _classify_duration(second, short_us, long_us)
-        if first_kind == "S" and second_kind == "L":
-            bits.append("0")
-            decoded_pairs += 1
-        elif first_kind == "L" and second_kind == "S":
-            bits.append("1")
-            decoded_pairs += 1
-        else:
-            bits.append("?")
-
-    confidence = decoded_pairs / max(len(bits), 1)
+    bit_string, confidence, _score, sync_us, label = best_result
     if confidence < 0.75:
         return None
 
-    bit_string = "".join(bits)
-    padded = "".join(bit if bit in {"0", "1"} else "0" for bit in bits)
-    hex_groups = [
-        f"{int(padded[index : index + 4], 2):X}"
-        for index in range(0, len(padded) - (len(padded) % 4), 4)
-    ]
-    hex_preview = "".join(hex_groups[:16]) if hex_groups else "n/a"
-    return (
-        f"Sync/pulse-width frame detected. Sync {timings[sync_index]} us, "
-        f"symbols ~{short_us}/{long_us} us, {len(bits)} bits. "
-        f"Bits: {bit_string[:96]} Hex: {hex_preview} (confidence {confidence:.0%})"
+    return _build_decoded_frame(
+        label=label,
+        bit_string=bit_string,
+        confidence=confidence,
+        sync_us=sync_us,
+        short_us=short_us,
+        long_us=long_us,
     )
 
 
@@ -302,7 +412,7 @@ def try_decode_burst(burst: BurstData) -> str:
 
     sync_pair_decode = _decode_sync_pair_frame(timings)
     if sync_pair_decode is not None:
-        return sync_pair_decode
+        return sync_pair_decode.format_text()
 
     clusters = cluster_durations_us(timings)
     if len(clusters) < 2:
@@ -400,6 +510,7 @@ class AnalyzerMainWindow(QMainWindow):
         self._bursts: list[BurstData] = []
         self._waterfall_rows: list[np.ndarray] = []
         self._decode_cache: dict[int, str] = {}
+        self._decode_detail_cache: dict[int, DecodedFrame | None] = {}
         self._recording_path: Path | None = None
         self._current_index = -1
         self._playback_speed = DEFAULT_PLAYBACK_SPEED
@@ -632,9 +743,11 @@ class AnalyzerMainWindow(QMainWindow):
         self._bursts = bursts
         self._waterfall_rows = [burst_histogram_row(burst) for burst in bursts]
         self._decode_cache.clear()
+        self._decode_detail_cache.clear()
         self._current_index = 0 if bursts else -1
         self._last_audio_index = -1
         self.file_value.setText(str(path))
+        self._apply_consensus_decodes()
         self._render_timeline()
         self._render_waterfall()
         self._render_analysis()
@@ -744,10 +857,167 @@ class AnalyzerMainWindow(QMainWindow):
         )
         self.analysis_view.setPlainText("\n".join(lines))
 
+    @staticmethod
+    def _known_bit_count(bit_string: str) -> int:
+        return sum(1 for bit in bit_string if bit in {"0", "1"})
+
+    @staticmethod
+    def _align_bit_strings(reference_bits: str, candidate_bits: str) -> tuple[int, int, int]:
+        best_shift = 0
+        best_matches = -1
+        best_overlap = 0
+        min_shift = -max(0, len(candidate_bits) - 12)
+        max_shift = max(0, len(reference_bits) - 12)
+        for shift in range(min_shift, max_shift + 1):
+            matches = 0
+            overlap = 0
+            for index, bit in enumerate(candidate_bits):
+                ref_index = index + shift
+                if ref_index < 0 or ref_index >= len(reference_bits):
+                    continue
+                ref_bit = reference_bits[ref_index]
+                if bit not in {"0", "1"} or ref_bit not in {"0", "1"}:
+                    continue
+                overlap += 1
+                if bit == ref_bit:
+                    matches += 1
+            if (
+                matches > best_matches
+                or (matches == best_matches and overlap > best_overlap)
+                or (matches == best_matches and overlap == best_overlap and abs(shift) < abs(best_shift))
+            ):
+                best_shift = shift
+                best_matches = matches
+                best_overlap = overlap
+        return best_shift, best_matches, best_overlap
+
+    def _decode_detail_for_index(self, index: int) -> DecodedFrame | None:
+        if index not in self._decode_detail_cache and 0 <= index < len(self._bursts):
+            self._decode_detail_cache[index] = decode_burst_details(self._bursts[index])
+        return self._decode_detail_cache.get(index)
+
+    def _apply_consensus_decodes(self) -> None:
+        groups: dict[tuple[int, int], list[tuple[int, DecodedFrame]]] = {}
+        for index, burst in enumerate(self._bursts):
+            detail = decode_burst_details(burst)
+            self._decode_detail_cache[index] = detail
+            if detail is None or self._known_bit_count(detail.bit_string) < 24:
+                continue
+            groups.setdefault(detail.family_key, []).append((index, detail))
+
+        for entries in groups.values():
+            if len(entries) < 2:
+                continue
+
+            sorted_entries = sorted(
+                entries,
+                key=lambda item: (
+                    self._known_bit_count(item[1].bit_string),
+                    len(item[1].bit_string),
+                    item[1].confidence,
+                ),
+                reverse=True,
+            )
+            clusters: list[list[tuple[int, DecodedFrame, int]]] = []
+            cluster_references: list[str] = []
+
+            for index, detail in sorted_entries:
+                assigned = False
+                for cluster_index, reference_bits in enumerate(cluster_references):
+                    shift, matches, overlap = self._align_bit_strings(reference_bits, detail.bit_string)
+                    if overlap < max(20, min(len(detail.bit_string), len(reference_bits)) // 2):
+                        continue
+                    if matches < max(14, int(overlap * 0.82)):
+                        continue
+                    clusters[cluster_index].append((index, detail, shift))
+                    assigned = True
+                    break
+                if not assigned:
+                    cluster_references.append(detail.bit_string)
+                    clusters.append([(index, detail, 0)])
+
+            for cluster in clusters:
+                if len(cluster) < 2:
+                    continue
+
+                reference_index, reference, _ = max(
+                    cluster,
+                    key=lambda item: (
+                        self._known_bit_count(item[1].bit_string),
+                        len(item[1].bit_string),
+                        item[1].confidence,
+                    ),
+                )
+                reference_bits = reference.bit_string
+                aligned_entries: list[tuple[int, DecodedFrame, int]] = []
+                for index, detail, _shift in cluster:
+                    shift, matches, overlap = self._align_bit_strings(reference_bits, detail.bit_string)
+                    if overlap < max(20, min(len(detail.bit_string), len(reference_bits)) // 2):
+                        continue
+                    if matches < max(14, int(overlap * 0.82)):
+                        continue
+                    aligned_entries.append((index, detail, shift))
+
+                if len(aligned_entries) < 2:
+                    continue
+
+                zero_votes = [0] * len(reference_bits)
+                one_votes = [0] * len(reference_bits)
+                for _index, detail, shift in aligned_entries:
+                    for bit_index, bit in enumerate(detail.bit_string):
+                        ref_index = bit_index + shift
+                        if ref_index < 0 or ref_index >= len(reference_bits):
+                            continue
+                        if bit == "0":
+                            zero_votes[ref_index] += 1
+                        elif bit == "1":
+                            one_votes[ref_index] += 1
+
+                consensus_bits: list[str] = []
+                for ref_index, ref_bit in enumerate(reference_bits):
+                    if zero_votes[ref_index] > one_votes[ref_index]:
+                        consensus_bits.append("0")
+                    elif one_votes[ref_index] > zero_votes[ref_index]:
+                        consensus_bits.append("1")
+                    elif ref_bit in {"0", "1"}:
+                        consensus_bits.append(ref_bit)
+                    else:
+                        consensus_bits.append("?")
+                consensus_string = "".join(consensus_bits)
+
+                for index, detail, shift in aligned_entries:
+                    resolved = list(detail.bit_string)
+                    for bit_index, bit in enumerate(resolved):
+                        if bit != "?":
+                            continue
+                        ref_index = bit_index + shift
+                        if ref_index < 0 or ref_index >= len(reference_bits):
+                            continue
+                        consensus_bit = consensus_string[ref_index]
+                        if consensus_bit in {"0", "1"}:
+                            resolved[bit_index] = consensus_bit
+                    resolved_string = "".join(resolved)
+                    original_unknown = detail.bit_string.count("?")
+                    resolved_unknown = resolved_string.count("?")
+                    if resolved_unknown >= original_unknown:
+                        continue
+                    resolved_confidence = self._known_bit_count(resolved_string) / max(len(resolved_string), 1)
+                    resolved_frame = _build_decoded_frame(
+                        label=f"Consensus pulse-width frame detected (x{len(aligned_entries)})",
+                        bit_string=resolved_string,
+                        confidence=max(detail.confidence, resolved_confidence),
+                        sync_us=detail.sync_us,
+                        short_us=detail.short_us,
+                        long_us=detail.long_us,
+                    )
+                    self._decode_cache[index] = resolved_frame.format_text()
+                    self._decode_detail_cache[index] = resolved_frame
+
     def _decode_text_for_index(self, index: int) -> str:
         decode_text = self._decode_cache.get(index)
         if decode_text is None and 0 <= index < len(self._bursts):
-            decode_text = try_decode_burst(self._bursts[index])
+            detail = self._decode_detail_for_index(index)
+            decode_text = detail.format_text() if detail is not None else try_decode_burst(self._bursts[index])
             self._decode_cache[index] = decode_text
         return decode_text or "-"
 
