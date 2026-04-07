@@ -32,12 +32,30 @@ struct FlipRSDRCapture {
     bool overflow_seen;
     FlipRSDRBurstBuffer working;
     FlipRSDRBurstBuffer buffered;
-    FlipRSDRBurstBuffer replay;
+    bool replay_valid;
+    bool replay_first_level;
+    uint32_t replay_frequency_hz;
+    uint32_t replay_total_count;
+    uint32_t replay_stored_count;
+    uint32_t* replay_timings;
     FlipRSDRReplayStatus replay_status;
     uint32_t replay_next_index;
     uint32_t live_chunk[FLIPRSDR_PROTOCOL_CHUNK_TIMINGS];
     uint16_t live_chunk_count;
 };
+
+static void fliprsdr_capture_reset_replay_buffer(FlipRSDRCapture* capture) {
+    furi_assert(capture);
+    if(capture->replay_timings) {
+        free(capture->replay_timings);
+        capture->replay_timings = NULL;
+    }
+    capture->replay_valid = false;
+    capture->replay_first_level = true;
+    capture->replay_frequency_hz = 0U;
+    capture->replay_total_count = 0U;
+    capture->replay_stored_count = 0U;
+}
 
 static void fliprsdr_capture_cleanup_worker(FlipRSDRCapture* capture) {
     if(capture->worker_finished && capture->worker_thread) {
@@ -89,8 +107,8 @@ static uint32_t fliprsdr_capture_effective_frequency_hz(const FlipRSDRCapture* c
     if(capture->buffered.valid && capture->buffered.frequency_hz) {
         return capture->buffered.frequency_hz;
     }
-    if(capture->replay.valid && capture->replay.frequency_hz) {
-        return capture->replay.frequency_hz;
+    if(capture->replay_valid && capture->replay_frequency_hz) {
+        return capture->replay_frequency_hz;
     }
     if(capture->running && capture->tuned_frequency_hz) {
         return capture->tuned_frequency_hz;
@@ -219,19 +237,19 @@ static LevelDuration fliprsdr_capture_replay_callback(void* context) {
     FlipRSDRCapture* capture = context;
     furi_assert(capture);
 
-    if(capture->replay_next_index == 0U && capture->replay.valid && !capture->replay.first_level) {
+    if(capture->replay_next_index == 0U && capture->replay_valid && !capture->replay_first_level) {
         capture->replay_next_index = 1U;
         return level_duration_wait();
     }
 
-    if(!capture->replay.valid || capture->replay_next_index >= capture->replay.stored_count) {
+    if(!capture->replay_valid || capture->replay_next_index >= capture->replay_stored_count) {
         return level_duration_reset();
     }
 
     const uint32_t timing_index = capture->replay_next_index++;
-    const bool level = capture->replay.first_level ? ((timing_index % 2U) == 0U) :
-                                                   ((timing_index % 2U) != 0U);
-    return level_duration_make(level, capture->replay.timings[timing_index]);
+    const bool level = capture->replay_first_level ? ((timing_index % 2U) == 0U) :
+                                                    ((timing_index % 2U) != 0U);
+    return level_duration_make(level, capture->replay_timings[timing_index]);
 }
 
 static int32_t fliprsdr_capture_worker(void* context) {
@@ -306,7 +324,7 @@ FlipRSDRCapture* fliprsdr_capture_alloc(FlipRSDRTransport* transport) {
     capture->overflow_seen = false;
     fliprsdr_burst_buffer_reset(&capture->working);
     fliprsdr_burst_buffer_reset(&capture->buffered);
-    fliprsdr_burst_buffer_reset(&capture->replay);
+    fliprsdr_capture_reset_replay_buffer(capture);
     capture->replay_status = FlipRSDRReplayStatusIdle;
     capture->replay_next_index = 0U;
     capture->live_chunk_count = 0U;
@@ -317,6 +335,7 @@ void fliprsdr_capture_free(FlipRSDRCapture* capture) {
     furi_assert(capture);
     fliprsdr_capture_stop(capture);
     fliprsdr_capture_cleanup_worker(capture);
+    fliprsdr_capture_reset_replay_buffer(capture);
     furi_mutex_free(capture->mutex);
     free(capture);
 }
@@ -451,19 +470,27 @@ bool fliprsdr_capture_prepare_replay(
     uint32_t total_count) {
     furi_assert(capture);
 
-    if(total_count == 0U || total_count > FLIPRSDR_BURST_TIMINGS_CAPACITY) {
+    if(total_count == 0U || total_count > FLIPRSDR_REPLAY_TIMINGS_CAPACITY) {
         return false;
     }
 
     furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
-    fliprsdr_burst_buffer_start(&capture->replay, 0U, 0U, frequency_hz, 0U, first_level);
-    capture->replay.total_count = total_count;
-    capture->replay.stored_count = 0U;
-    capture->replay.complete = false;
-    capture->replay_status = FlipRSDRReplayStatusLoading;
-    capture->replay_next_index = 0U;
+    fliprsdr_capture_reset_replay_buffer(capture);
+    capture->replay_timings = malloc(sizeof(uint32_t) * total_count);
+    if(capture->replay_timings) {
+        capture->replay_valid = true;
+        capture->replay_first_level = first_level;
+        capture->replay_frequency_hz = frequency_hz;
+        capture->replay_total_count = total_count;
+        capture->replay_stored_count = 0U;
+        capture->replay_status = FlipRSDRReplayStatusLoading;
+        capture->replay_next_index = 0U;
+    } else {
+        capture->replay_status = FlipRSDRReplayStatusError;
+        capture->replay_next_index = 0U;
+    }
     furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
-    return true;
+    return capture->replay_valid;
 }
 
 bool fliprsdr_capture_append_replay_timings(
@@ -477,9 +504,10 @@ bool fliprsdr_capture_append_replay_timings(
     bool ok = false;
     furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
 
-    if(capture->replay.valid && offset == capture->replay.stored_count &&
-       (capture->replay.stored_count + timing_count) <= capture->replay.total_count &&
-       capture->replay.total_count <= FLIPRSDR_BURST_TIMINGS_CAPACITY) {
+    if(capture->replay_valid && capture->replay_timings &&
+       offset == capture->replay_stored_count &&
+       (capture->replay_stored_count + timing_count) <= capture->replay_total_count &&
+       capture->replay_total_count <= FLIPRSDR_REPLAY_TIMINGS_CAPACITY) {
         ok = true;
         for(uint16_t i = 0; i < timing_count; i++) {
             const uint32_t duration = timings[i];
@@ -487,18 +515,18 @@ bool fliprsdr_capture_append_replay_timings(
                 ok = false;
                 break;
             }
-            capture->replay.timings[capture->replay.stored_count++] = duration;
+            capture->replay_timings[capture->replay_stored_count++] = duration;
         }
         if(ok) {
             capture->replay_status =
-                (capture->replay.stored_count == capture->replay.total_count) ?
+                (capture->replay_stored_count == capture->replay_total_count) ?
                     FlipRSDRReplayStatusReady :
                     FlipRSDRReplayStatusLoading;
         }
     }
 
     if(!ok) {
-        fliprsdr_burst_buffer_reset(&capture->replay);
+        fliprsdr_capture_reset_replay_buffer(capture);
         capture->replay_status = FlipRSDRReplayStatusError;
         capture->replay_next_index = 0U;
     }
@@ -510,7 +538,7 @@ bool fliprsdr_capture_append_replay_timings(
 void fliprsdr_capture_cancel_replay(FlipRSDRCapture* capture) {
     furi_assert(capture);
     furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
-    fliprsdr_burst_buffer_reset(&capture->replay);
+    fliprsdr_capture_reset_replay_buffer(capture);
     capture->replay_status = FlipRSDRReplayStatusIdle;
     capture->replay_next_index = 0U;
     furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
@@ -525,10 +553,10 @@ bool fliprsdr_capture_replay(FlipRSDRCapture* capture) {
     uint32_t total_count = 0U;
     bool replay_valid = false;
     furi_check(furi_mutex_acquire(capture->mutex, FuriWaitForever) == FuriStatusOk);
-    replay_valid = capture->replay.valid;
-    frequency_hz = capture->replay.frequency_hz;
-    stored_count = capture->replay.stored_count;
-    total_count = capture->replay.total_count;
+    replay_valid = capture->replay_valid;
+    frequency_hz = capture->replay_frequency_hz;
+    stored_count = capture->replay_stored_count;
+    total_count = capture->replay_total_count;
     capture->replay_status = FlipRSDRReplayStatusTransmitting;
     capture->replay_next_index = 0U;
     furi_check(furi_mutex_release(capture->mutex) == FuriStatusOk);
@@ -618,8 +646,8 @@ void fliprsdr_capture_copy_snapshot(
     snapshot->frequency_hz = fliprsdr_capture_effective_frequency_hz(capture);
     snapshot->last_rssi = capture->last_rssi;
     snapshot->replay_status = capture->replay_status;
-    snapshot->replay_total_count = capture->replay.total_count;
-    snapshot->replay_stored_count = capture->replay.stored_count;
+    snapshot->replay_total_count = capture->replay_total_count;
+    snapshot->replay_stored_count = capture->replay_stored_count;
 
     if(capture->running) {
         snapshot->state = capture->in_burst ?
